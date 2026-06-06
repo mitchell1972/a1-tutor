@@ -36,8 +36,11 @@ Go to **Variables** tab and add these:
 |---|---|
 | `TELEGRAM_BOT_TOKEN` | From [@BotFather](https://t.me/BotFather) |
 | `WHATSAPP_PHONE_NUMBER_ID` | Meta Cloud API |
-| `WHATSAPP_ACCESS_TOKEN` | Meta Cloud API |
+| `WHATSAPP_ACCESS_TOKEN` | Meta Cloud API (permanent System User token) |
 | `WHATSAPP_VERIFY_TOKEN` | Any string you choose |
+| `WHATSAPP_APP_SECRET` | Meta → App Settings → Basic → App Secret (verifies inbound webhooks) |
+| `WHATSAPP_DAILY_TEMPLATE` | Approved template name for the 7am push — leave blank until approved (Phase 2) |
+| `WHATSAPP_TEMPLATE_LANG` | Template language code, e.g. `en` (default `en`) |
 | `FLUTTERWAVE_PUBLIC_KEY` | `FLWPUBK-...` |
 | `FLUTTERWAVE_SECRET_KEY` | `FLWSECK-...` |
 | `FLUTTERWAVE_ENCRYPTION_KEY` | Your encryption key |
@@ -60,6 +63,32 @@ Update the Flutterwave webhook URL to:
 ```
 https://a1-tutor.up.railway.app/webhook/flutterwave
 ```
+
+### 6. Set the WhatsApp webhook in Meta
+
+Meta app dashboard → WhatsApp → Configuration → Webhook:
+
+- **Callback URL:** `https://a1-tutor.up.railway.app/webhook/whatsapp`
+- **Verify token:** the same string you put in `WHATSAPP_VERIFY_TOKEN`
+- **Subscribe to:** `messages`
+
+Students can now register and drill entirely inside WhatsApp (Phase 1) — they message
+your number, pick exam → subjects → time via tappable menus, and start drilling on demand.
+
+### 7. (Phase 2) Create the daily-push template
+
+Proactive messages outside Meta's 24-hour window require a **pre-approved template**.
+Meta app dashboard → WhatsApp → Manage Templates → Create:
+
+- **Name:** `daily_questions_ready` (put this in `WHATSAPP_DAILY_TEMPLATE`)
+- **Category:** Utility
+- **Language:** English (matches `WHATSAPP_TEMPLATE_LANG`, e.g. `en`)
+- **Body:** `📚 Good morning! Your daily exam questions are ready. Tap below to start today's drill.`
+- **Button:** Quick reply, text `Start drill` (payload `daily:start` if your editor allows custom payloads)
+
+Once Meta approves it (usually a day or two), set `WHATSAPP_DAILY_TEMPLATE=daily_questions_ready`
+and redeploy. At each student's delivery time they'll get the template; tapping it starts their drill.
+Until then, leave `WHATSAPP_DAILY_TEMPLATE` blank — WhatsApp students just pull their drill on demand.
 
 ## Deploying Updates
 

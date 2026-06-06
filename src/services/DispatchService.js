@@ -4,12 +4,15 @@
 import { checkAccess } from '../domain/SubscriptionValidator.js';
 
 export class DispatchService {
-  constructor({ repo, questionService, subscriptionService, telegram, whatsapp }) {
+  constructor({ repo, questionService, subscriptionService, telegram, whatsapp, whatsappDailyTemplate, whatsappTemplateLang }) {
     this.repo = repo;
     this.questionService = questionService;
     this.subscriptionService = subscriptionService;
     this.telegram = telegram;
     this.whatsapp = whatsapp;
+    // Phase 2: approved Meta template used for the proactive daily push.
+    this.whatsappDailyTemplate = whatsappDailyTemplate || null;
+    this.whatsappTemplateLang = whatsappTemplateLang || 'en';
   }
 
   /**
@@ -45,17 +48,29 @@ export class DispatchService {
       return;
     }
 
-    // Generate questions
-    const questions = this.questionService.generateDailySet(user);
-    if (questions.length === 0) {
-      console.warn(`No questions available for ${user.id}`);
+    // WhatsApp: proactive sends outside Meta's 24-hour window need an approved
+    // template. Send the template prompt and generate questions only when the
+    // student taps "Start" (handled by WhatsAppBotAdapter) — so we never burn
+    // questions on a push the student never opens.
+    if (user.channel === 'whatsapp' && user.phone) {
+      if (this.whatsappDailyTemplate) {
+        await this.whatsapp.sendTemplate(user.phone, this.whatsappDailyTemplate, this.whatsappTemplateLang);
+        return;
+      }
+      // No template configured — only works inside the 24h window (e.g. testing).
+      console.warn(`WhatsApp daily template not set (WHATSAPP_DAILY_TEMPLATE) — attempting direct send to ${user.id}; will fail outside the 24h window.`);
+      const questions = this.questionService.generateDailySet(user);
+      if (questions.length) await this.whatsapp.sendQuestions(user.phone, questions, `📚 Daily Drill — ${questions.length} questions. Tap an option to answer!`);
       return;
     }
 
-    // Dispatch
-    if (user.channel === 'whatsapp' && user.phone) {
-      await this._dispatchWhatsApp(user, questions);
-    } else if (user.telegram_id) {
+    // Telegram: send directly.
+    if (user.telegram_id) {
+      const questions = this.questionService.generateDailySet(user);
+      if (questions.length === 0) {
+        console.warn(`No questions available for ${user.id}`);
+        return;
+      }
       await this._dispatchTelegram(user, questions);
     }
   }
@@ -87,10 +102,6 @@ export class DispatchService {
 
       if (i < total - 1) await this._sleep(3000);
     }
-  }
-
-  async _dispatchWhatsApp(user, questions) {
-    await this.whatsapp.sendBatch(user.phone, questions);
   }
 
   async _notifyTrialExpired(user) {
