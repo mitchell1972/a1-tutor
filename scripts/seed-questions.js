@@ -658,15 +658,6 @@ const QUESTIONS = [
   },
 ];
 
-console.log(`📝 Seeding ${QUESTIONS.length} questions...`);
-
-// Only seed if empty
-const existingCount = db.count('questions');
-if (existingCount > 0) {
-  console.log(`✅ ${existingCount} questions already in bank. Skipping seed.`);
-  process.exit(0);
-}
-
 /**
  * Seed questions into the given repository.
  * Returns the number of questions inserted.
@@ -685,16 +676,22 @@ export async function seed(repo) {
 const isMain = process.argv[1]?.includes('seed-questions');
 if (isMain) {
   const db = new JsonlRepository();
-  await seed(db);
+  const existingCount = db.count('questions');
+  if (existingCount > 0) {
+    console.log(`✅ ${existingCount} questions already in bank. Skipping seed.`);
+  } else {
+    console.log(`📝 Seeding ${QUESTIONS.length} questions...`);
+    await seed(db);
 
-  const allQuestions = db.all('questions');
-  const bySubject = {};
-  for (const q of allQuestions) {
-    bySubject[q.subject] = (bySubject[q.subject] || 0) + 1;
-  }
+    const allQuestions = db.all('questions');
+    const bySubject = {};
+    for (const q of allQuestions) {
+      bySubject[q.subject] = (bySubject[q.subject] || 0) + 1;
+    }
 
-  console.log('\n📊 Questions by subject:');
-  for (const [subject, count] of Object.entries(bySubject).sort()) {
-    console.log(`   ${subject}: ${count}`);
+    console.log('\n📊 Questions by subject:');
+    for (const [subject, count] of Object.entries(bySubject).sort()) {
+      console.log(`   ${subject}: ${count}`);
+    }
   }
 }
