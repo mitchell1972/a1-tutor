@@ -102,7 +102,6 @@ export class TelegramBotAdapter {
       else if (data.startsWith('subject:')) await this._onSubjectToggle(chatId, session, data.split(':')[1], query.message.message_id, queryId);
       else if (data === 'subjects:done') await this._onSubjectsDone(chatId, session, query.message.message_id, queryId);
       else if (data.startsWith('time:'))  await this._onTime(chatId, session, data.split(':').slice(1), query.message.message_id);
-      else if (data.startsWith('channel:')) await this._onChannel(chatId, session, data.split(':')[1], query.message.message_id);
       else if (data.startsWith('menu:'))  await this._onMenu(chatId, data.split(':')[1]);
       else if (data.startsWith('plan:'))  await this._onPlan(chatId, data.split(':')[1]);
       else if (data.startsWith('answer:')) await this._onAnswer(chatId, data);
@@ -203,26 +202,16 @@ export class TelegramBotAdapter {
     const [hour, minute] = timeParts.map(Number);
     session.delivery_hour = hour;
     session.delivery_minute = minute;
-    session.step = 'channel';
 
-    await this.tg.editMessage(chatId, msgId,
-      `*How do you want to receive your questions?*`,
-      [
-        [{ text: '📱 Telegram (You\'re here!)', callback_data: 'channel:telegram' }],
-        [{ text: '💬 WhatsApp', callback_data: 'channel:whatsapp' }],
-      ]
-    );
-  }
-
-  async _onChannel(chatId, session, channel, msgId) {
-    // Use UserService to register
+    // WhatsApp is now its own front door (students register there directly),
+    // so the Telegram bot always registers Telegram delivery — no channel step.
     const user = this.userService.registerUser({
       telegramId: chatId,
       examType: session.exam_type,
       subjects: session.selectedSubjects,
       deliveryHour: session.delivery_hour,
       deliveryMinute: session.delivery_minute,
-      channel,
+      channel: 'telegram',
     });
 
     this._sessions.delete(chatId);
@@ -237,8 +226,7 @@ export class TelegramBotAdapter {
       `🎉 *You're all set, Scholar!*\n\n` +
       `📚 Exam: ${EXAM_TYPES[session.exam_type?.toUpperCase()]?.label}\n` +
       `📖 Subjects: ${subjectNames}\n` +
-      `⏰ Delivery: Daily at ${timeStr}\n` +
-      `📱 Channel: ${channel === 'telegram' ? 'Telegram' : 'WhatsApp'}\n\n` +
+      `⏰ Delivery: Daily at ${timeStr}\n\n` +
       `🎁 *${TRIAL_DAYS}-Day Free Trial* — ends ${trialEnd.toLocaleDateString('en-GB', { day: 'numeric', month: 'long' })}\n` +
       `Questions start at your next delivery time!\n\n` +
       `Start now with a practice round?`,

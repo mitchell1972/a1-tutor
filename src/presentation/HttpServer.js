@@ -4,19 +4,20 @@
 import express from 'express';
 
 export class HttpServer {
-  constructor({ paymentService, dispatchService, whatsapp, questionService, repo }) {
+  constructor({ paymentService, dispatchService, whatsapp, whatsappBot, repo }) {
     this.paymentService = paymentService;
     this.dispatchService = dispatchService;
     this.whatsapp = whatsapp;
-    this.questionService = questionService;
+    this.whatsappBot = whatsappBot;
     this.repo = repo;
     this.app = express();
     this._setupRoutes();
   }
 
   _setupRoutes() {
-    // Raw body for Flutterwave signature verification
+    // Raw body for webhook signature verification (both providers sign the raw bytes)
     this.app.use('/webhook/flutterwave', express.raw({ type: 'application/json' }));
+    this.app.use('/webhook/whatsapp', express.raw({ type: 'application/json' }));
     this.app.use(express.json());
 
     // ─── Flutterwave ──────────────────────────────────
@@ -61,39 +62,22 @@ export class HttpServer {
 
     this.app.post('/webhook/whatsapp', async (req, res) => {
       try {
-        const parsed = this.whatsapp.parseIncoming(req.body);
-        if (!parsed) return res.status(200).json({ status: 'no message' });
-
-        if (parsed.type === 'answer') {
-          const question = this.repo.getQuestion(parsed.questionId);
-          if (!question) return res.status(200).json({ status: 'question not found' });
-
-          const user = this.repo.getUserByPhone(parsed.from);
-          if (!user) return res.status(200).json({ status: 'user not found' });
-
-          const result = this.questionService.processAnswer(user.id, parsed.questionId, parsed.answer);
-          if (result.error) return res.status(200).json({ status: result.error });
-
-          const feedback = this.questionService.formatFeedback(result);
-          await this.whatsapp.sendText(parsed.from, feedback);
-
-          // Check if drill complete
-          const todayDispatched = this.repo.getTodayDispatches(user.id);
-          const totalToday = this.repo.getTodayDispatches(user.id)
-            .reduce((sum, d) => sum + (d.question_ids?.length || 0), 0);
-          const today = new Date().toISOString().split('T')[0];
-          const todayResponses = this.repo.getResponsesByDate(user.id, today);
-
-          if (todayResponses.length >= totalToday) {
-            const report = this.questionService.formatDailyReport(user.id, todayResponses);
-            await this.whatsapp.sendText(parsed.from, report);
-          }
+        // Verify Meta's signature over the raw body (the "secret stamp")
+        const signature = req.headers['x-hub-signature-256'];
+        if (!this.whatsapp.verifySignature(req.body, signature)) {
+          console.warn('Invalid WhatsApp webhook signature — rejecting');
+          return res.status(401).json({ error: 'invalid signature' });
         }
+
+        const json = JSON.parse(req.body.toString('utf-8'));
+        const parsed = this.whatsapp.parseIncoming(json);
+        if (parsed) await this.whatsappBot.handleInbound(parsed);
 
         res.status(200).json({ status: 'ok' });
       } catch (err) {
         console.error('WhatsApp webhook error:', err);
-        res.status(500).json({ error: 'internal' });
+        // Respond 200 so Meta doesn't retry-storm on a logic/parse error.
+        res.status(200).json({ status: 'error' });
       }
     });
 

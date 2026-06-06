@@ -2,6 +2,7 @@
 // Orchestrates user registration, profile management, and access control.
 import { SUBJECTS, SUBJECT_PRESETS, EXAM_TYPES, QUESTIONS_PER_SUBJECT, TRIAL_DAYS } from '../config/subjects.js';
 import { checkAccess } from '../domain/SubscriptionValidator.js';
+import { normalizePhone } from '../infrastructure/repositories/JsonlRepository.js';
 
 export class UserService {
   constructor({ repo }) {
@@ -21,23 +22,33 @@ export class UserService {
     };
   }
 
-  registerUser({ telegramId, examType, subjects, deliveryHour, deliveryMinute, channel }) {
+  registerUser({ telegramId, phone, examType, subjects, deliveryHour, deliveryMinute, channel }) {
     // Validate
     if (!EXAM_TYPES[examType?.toUpperCase()]) throw new Error(`Invalid exam type: ${examType}`);
     if (!subjects || subjects.length < 2) throw new Error('Minimum 2 subjects required');
     if (!subjects.includes('english')) subjects = ['english', ...subjects.filter(s => s !== 'english')];
 
-    const user = this.repo.createUser({
-      telegram_id: telegramId,
+    let resolvedChannel = channel || (phone && !telegramId ? 'whatsapp' : 'telegram');
+    if (resolvedChannel === 'whatsapp' && !phone) {
+      // WhatsApp needs a number to address messages. A Telegram user who picks
+      // "WhatsApp delivery" but has no number is still reachable on Telegram,
+      // so fall back rather than crash. (WhatsApp-native signup always has a phone.)
+      if (telegramId) resolvedChannel = 'telegram';
+      else throw new Error('WhatsApp channel requires a phone number');
+    }
+
+    const data = {
       exam_type: examType,
       subjects,
       delivery_hour: deliveryHour ?? 7,
       delivery_minute: deliveryMinute ?? 0,
-      channel: channel || 'telegram',
+      channel: resolvedChannel,
       questions_per_subject: QUESTIONS_PER_SUBJECT,
-    });
+    };
+    if (telegramId) data.telegram_id = telegramId;
+    if (phone) data.phone = normalizePhone(phone);
 
-    return user;
+    return this.repo.createUser(data);
   }
 
   // ─── Access ────────────────────────────────────────

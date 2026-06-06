@@ -15,6 +15,7 @@ import { DispatchService } from '../services/DispatchService.js';
 import { AnalyticsService } from '../services/AnalyticsService.js';
 
 import { TelegramBotAdapter } from '../presentation/TelegramBot.js';
+import { WhatsAppBotAdapter } from '../presentation/WhatsAppBotAdapter.js';
 import { HttpServer } from '../presentation/HttpServer.js';
 
 export async function buildContainer(env) {
@@ -35,6 +36,7 @@ export async function buildContainer(env) {
     phoneNumberId: env.WHATSAPP_PHONE_NUMBER_ID,
     accessToken: env.WHATSAPP_ACCESS_TOKEN,
     verifyToken: env.WHATSAPP_VERIFY_TOKEN,
+    appSecret: env.WHATSAPP_APP_SECRET,
   });
 
   // ─── Services ──────────────────────────────────────
@@ -51,6 +53,8 @@ export async function buildContainer(env) {
     subscriptionService,
     telegram: telegramChannel,
     whatsapp: whatsappChannel,
+    whatsappDailyTemplate: env.WHATSAPP_DAILY_TEMPLATE || null,
+    whatsappTemplateLang: env.WHATSAPP_TEMPLATE_LANG || 'en',
   });
 
   // ─── Scheduler ─────────────────────────────────────
@@ -71,11 +75,21 @@ export async function buildContainer(env) {
     analyticsService,
   });
 
+  const whatsappBot = new WhatsAppBotAdapter({
+    channel: whatsappChannel,
+    repo,
+    userService,
+    questionService,
+    subscriptionService,
+    paymentService,
+    analyticsService,
+  });
+
   const httpServer = new HttpServer({
     paymentService,
     dispatchService,
     whatsapp: whatsappChannel,
-    questionService,
+    whatsappBot,
     repo,
   });
 
@@ -92,6 +106,7 @@ export async function buildContainer(env) {
     analyticsService,
     scheduler,
     telegramBot,
+    whatsappBot,
     httpServer,
   };
 }
