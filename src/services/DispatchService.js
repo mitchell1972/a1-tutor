@@ -19,7 +19,7 @@ export class DispatchService {
    * Called by the scheduler every minute with current WAT hour/minute.
    */
   async dispatchAt(hour, minute) {
-    const dueUsers = this.repo.getUsersDueForDelivery(hour, minute);
+    const dueUsers = await this.repo.getUsersDueForDelivery(hour, minute);
     if (dueUsers.length === 0) return;
 
     console.log(`📤 Dispatching to ${dueUsers.length} users at ${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')} WAT`);
@@ -36,13 +36,13 @@ export class DispatchService {
 
   async _dispatchToUser(user) {
     // Check already dispatched today
-    if (this.questionService.isAlreadyDispatchedToday(user.id)) return;
+    if (await this.questionService.isAlreadyDispatchedToday(user.id)) return;
 
     // Check access (trial or paid)
-    const access = this.subscriptionService.getStatus(user.id);
+    const access = await this.subscriptionService.getStatus(user.id);
     if (!access.valid) {
       if (access.reason === 'trial_expired') {
-        this.subscriptionService.expireTrial(user.id);
+        await this.subscriptionService.expireTrial(user.id);
         await this._notifyTrialExpired(user);
       }
       return;
@@ -59,14 +59,14 @@ export class DispatchService {
       }
       // No template configured — only works inside the 24h window (e.g. testing).
       console.warn(`WhatsApp daily template not set (WHATSAPP_DAILY_TEMPLATE) — attempting direct send to ${user.id}; will fail outside the 24h window.`);
-      const questions = this.questionService.generateDailySet(user);
+      const questions = await this.questionService.generateDailySet(user);
       if (questions.length) await this.whatsapp.sendQuestions(user.phone, questions, `📚 Daily Drill — ${questions.length} questions. Tap an option to answer!`);
       return;
     }
 
     // Telegram: send directly.
     if (user.telegram_id) {
-      const questions = this.questionService.generateDailySet(user);
+      const questions = await this.questionService.generateDailySet(user);
       if (questions.length === 0) {
         console.warn(`No questions available for ${user.id}`);
         return;
@@ -120,7 +120,7 @@ export class DispatchService {
   }
 
   async notifyPaymentConfirmed(userId, plan, endDate) {
-    const user = this.repo.getUser(userId);
+    const user = await this.repo.getUser(userId);
     if (!user) return;
 
     const msg = `✅ *Payment Confirmed!*\n\n` +

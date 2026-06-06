@@ -64,7 +64,7 @@ export class WhatsAppBotAdapter {
         return await this._handleText(phone, parsed.body || '');
       }
       // unknown message type
-      const user = this.repo.getUserByPhone(phone);
+      const user = await this.repo.getUserByPhone(phone);
       return user ? this._showMenu(phone, user) : this._startRegistration(phone);
     } catch (err) {
       console.error('WhatsAppBot handleInbound error:', err);
@@ -88,7 +88,7 @@ export class WhatsAppBotAdapter {
 
   async _handleText(phone, text) {
     const t = (text || '').trim().toLowerCase();
-    const user = this.repo.getUserByPhone(phone);
+    const user = await this.repo.getUserByPhone(phone);
 
     // Any message from someone without an account starts sign-up.
     if (!user) return this._startRegistration(phone);
@@ -162,7 +162,7 @@ export class WhatsAppBotAdapter {
 
     let user;
     try {
-      user = this.userService.registerUser({
+      user = await this.userService.registerUser({
         phone,
         examType: session.exam_type,
         subjects: session.subjects,
@@ -196,7 +196,7 @@ export class WhatsAppBotAdapter {
   // ─── Menu ──────────────────────────────────────────
 
   async _onMenu(phone, action) {
-    const user = this.repo.getUserByPhone(phone);
+    const user = await this.repo.getUserByPhone(phone);
     if (!user) return this._startRegistration(phone);
 
     switch (action) {
@@ -224,19 +224,19 @@ export class WhatsAppBotAdapter {
   // ─── Drill ─────────────────────────────────────────
 
   async _startDrill(phone, user) {
-    const access = this.subscriptionService.getStatus(user.id);
+    const access = await this.subscriptionService.getStatus(user.id);
     if (!access.valid) {
       await this.channel.sendText(phone, '🔒 Your access has ended. Subscribe to keep drilling:');
       return this._showSubscribe(phone, user);
     }
 
-    if (this.questionService.isAlreadyDispatchedToday(user.id)) {
+    if (await this.questionService.isAlreadyDispatchedToday(user.id)) {
       return this.channel.sendText(phone, '✅ You\'ve already done today\'s drill. Come back tomorrow! 💪');
     }
 
     let questions;
     try {
-      questions = this.questionService.generateDailySet(user);
+      questions = await this.questionService.generateDailySet(user);
     } catch (err) {
       console.error('generateDailySet failed:', err.message);
       return this.channel.sendText(phone, '⚠️ No questions available right now. Try again later.');
@@ -255,23 +255,23 @@ export class WhatsAppBotAdapter {
   // ─── Answer ────────────────────────────────────────
 
   async _handleAnswer(phone, questionId, answerKey) {
-    const user = this.repo.getUserByPhone(phone);
+    const user = await this.repo.getUserByPhone(phone);
     if (!user) return this._startRegistration(phone);
     if (!questionId || !answerKey) return;
 
-    const result = this.questionService.processAnswer(user.id, questionId, answerKey);
+    const result = await this.questionService.processAnswer(user.id, questionId, answerKey);
     if (result.error) return;
 
     const feedback = this.questionService.formatFeedback(result);
-    const total = this.questionService.getTotalDispatchedToday(user.id);
-    const progress = this.questionService.getCumulativeProgress(user.id, total);
+    const total = await this.questionService.getTotalDispatchedToday(user.id);
+    const progress = await this.questionService.getCumulativeProgress(user.id, total);
 
     await this.channel.sendText(phone, `${feedback}\n\n📊 So far: ${progress.correct}/${progress.answered} correct`);
 
     if (progress.isComplete) {
       const today = new Date().toISOString().split('T')[0];
-      const todayResponses = this.repo.getResponsesByDate(user.id, today);
-      const report = this.questionService.formatDailyReport(user.id, todayResponses);
+      const todayResponses = await this.repo.getResponsesByDate(user.id, today);
+      const report = await this.questionService.formatDailyReport(user.id, todayResponses);
       await this.channel.sendText(phone, report);
     }
   }
@@ -279,7 +279,7 @@ export class WhatsAppBotAdapter {
   // ─── Stats ─────────────────────────────────────────
 
   async _showStats(phone, user) {
-    const a = this.analyticsService.getUserAnalytics(user.id);
+    const a = await this.analyticsService.getUserAnalytics(user.id);
     if (!a) return this.channel.sendText(phone, 'No stats yet — do a drill first!');
 
     let msg = `📊 Your Stats\n\n`;
@@ -300,7 +300,7 @@ export class WhatsAppBotAdapter {
   // ─── Subscription ──────────────────────────────────
 
   async _showSubscribe(phone, user) {
-    const info = this.subscriptionService.getDisplayInfo(user.id);
+    const info = await this.subscriptionService.getDisplayInfo(user.id);
     await this.channel.sendList(
       phone,
       info.text,
@@ -311,7 +311,7 @@ export class WhatsAppBotAdapter {
   }
 
   async _onPlan(phone, planId) {
-    const user = this.repo.getUserByPhone(phone);
+    const user = await this.repo.getUserByPhone(phone);
     if (!user) return this._startRegistration(phone);
 
     try {

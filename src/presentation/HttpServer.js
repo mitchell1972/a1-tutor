@@ -83,13 +83,17 @@ export class HttpServer {
 
     // ─── Health ───────────────────────────────────────
 
-    this.app.get('/health', (req, res) => {
-      res.json({
-        status: 'ok',
-        uptime: process.uptime(),
-        questions: this.repo.getTotalQuestions(),
-        users: this.repo.all('users').length,
-      });
+    this.app.get('/health', async (req, res) => {
+      try {
+        res.json({
+          status: 'ok',
+          uptime: process.uptime(),
+          questions: await this.repo.getTotalQuestions(),
+          users: (await this.repo.all('users')).length,
+        });
+      } catch (err) {
+        res.status(500).json({ status: 'error', error: err.message });
+      }
     });
   }
 

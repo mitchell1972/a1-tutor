@@ -21,7 +21,7 @@ async function main() {
   // 3. Auto-seed the question bank if empty (e.g. first boot on a new volume).
   //    Wrapped so a seeding hiccup can never take the whole service down.
   try {
-    let questionCount = container.repo.getTotalQuestions();
+    let questionCount = await container.repo.getTotalQuestions();
     console.log(`📦 Questions in bank: ${questionCount}`);
 
     if (questionCount === 0) {

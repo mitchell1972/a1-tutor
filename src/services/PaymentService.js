@@ -13,7 +13,7 @@ export class PaymentService {
    * Create a payment link for the user.
    */
   async createPaymentLink(userId, planId) {
-    const user = this.repo.getUser(userId);
+    const user = await this.repo.getUser(userId);
     if (!user) throw new Error('User not found');
 
     const plan = getPlan(planId);
@@ -51,7 +51,7 @@ export class PaymentService {
     // Activate subscription
     const endDate = calculateEndDate(plan);
 
-    this.repo.createSubscription({
+    await this.repo.createSubscription({
       user_id: userId,
       plan,
       status: 'active',
@@ -62,7 +62,7 @@ export class PaymentService {
       flw_id: parsed.flwId,
     });
 
-    this.repo.updateUser(userId, {
+    await this.repo.updateUser(userId, {
       subscription_status: 'active',
       subscription_expiry: new Date(endDate).toISOString(),
     });

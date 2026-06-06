@@ -12,11 +12,11 @@ export class SubscriptionService {
   /**
    * Check a user's current access status with full context.
    */
-  getStatus(userId) {
-    const user = this.repo.getUser(userId);
+  async getStatus(userId) {
+    const user = await this.repo.getUser(userId);
     if (!user) return { valid: false, reason: 'not_found' };
 
-    const activeSub = this.repo.getActiveSubscription(userId);
+    const activeSub = await this.repo.getActiveSubscription(userId);
     const access = checkAccess(user, activeSub);
 
     return {
@@ -32,16 +32,17 @@ export class SubscriptionService {
   /**
    * Check if user has valid access. Used by dispatch service.
    */
-  hasAccess(userId) {
-    const status = this.getStatus(userId);
+  async hasAccess(userId) {
+    const status = await this.getStatus(userId);
     return status.valid;
   }
 
   /**
    * Get list of users whose trial just expired (for notification).
    */
-  getRecentlyExpiredTrials() {
-    return this.repo.all('users').filter(u => {
+  async getRecentlyExpiredTrials() {
+    const users = await this.repo.all('users');
+    return users.filter(u => {
       if (u.subscription_status !== 'trial') return false;
       const trialStart = u.trial_start ? new Date(u.trial_start) : new Date(u.created_at);
       const trialEnd = new Date(trialStart);
@@ -57,27 +58,27 @@ export class SubscriptionService {
   /**
    * Activate a subscription after confirmed payment.
    */
-  activate(userId, plan, endDate) {
-    this.repo.updateUser(userId, {
+  async activate(userId, plan, endDate) {
+    await this.repo.updateUser(userId, {
       subscription_status: 'active',
       subscription_expiry: new Date(endDate).toISOString(),
     });
 
-    return this.repo.getUser(userId);
+    return await this.repo.getUser(userId);
   }
 
   /**
    * Expire a user's trial (mark as expired).
    */
-  expireTrial(userId) {
-    this.repo.updateUser(userId, { subscription_status: 'expired' });
+  async expireTrial(userId) {
+    await this.repo.updateUser(userId, { subscription_status: 'expired' });
   }
 
   /**
    * Get formatted subscription text for display to user.
    */
-  getDisplayInfo(userId) {
-    const status = this.getStatus(userId);
+  async getDisplayInfo(userId) {
+    const status = await this.getStatus(userId);
     const plans = PLANS;
 
     let text = '';

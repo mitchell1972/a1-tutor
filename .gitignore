@@ -4,3 +4,4 @@ data/*.jsonl
 !data/questions.jsonl
 *.log
 .DS_Store
+.pgurl

@@ -8,36 +8,50 @@ export class AnalyticsService {
     this.repo = repo;
   }
 
-  getUserAnalytics(userId) {
-    const user = this.repo.getUser(userId);
+  async getUserAnalytics(userId) {
+    const user = await this.repo.getUser(userId);
     if (!user) return null;
 
-    const answerDates = this.repo.getAllUserResponseDates(userId);
+    const answerDates = await this.repo.getAllUserResponseDates(userId);
     const streak = calculateStreak(answerDates);
 
     const today = new Date().toISOString().split('T')[0];
-    const todayResponses = this.repo.getResponsesByDate(userId, today);
-    const todayStats = calculateDailyStats(todayResponses, (id) => this.repo.getQuestion(id));
+    const todayResponses = await this.repo.getResponsesByDate(userId, today);
+    const allResponses = await this.repo.getResponses(userId, { limit: 10000 });
 
-    const allResponses = this.repo.getResponses(userId, { limit: 10000 });
-    const weakAreas = identifyWeakAreas(allResponses, (id) => this.repo.getQuestion(id));
-
-    // 7-day trend
-    const trend = [];
+    // 7-day trend — fetch each day's responses
+    const trendDays = [];
     for (let i = 6; i >= 0; i--) {
       const d = new Date();
       d.setDate(d.getDate() - i);
       const dateStr = d.toISOString().split('T')[0];
-      const dayResponses = this.repo.getResponsesByDate(userId, dateStr);
-      const stats = calculateDailyStats(dayResponses, (id) => this.repo.getQuestion(id));
-      trend.push({
+      const dayResponses = await this.repo.getResponsesByDate(userId, dateStr);
+      trendDays.push({ d, dateStr, dayResponses });
+    }
+
+    // Batch-fetch every question these responses touched, then use a sync lookup
+    // for the (synchronous) domain functions — one query instead of N.
+    const refIds = new Set();
+    for (const r of todayResponses) refIds.add(r.question_id);
+    for (const r of allResponses) refIds.add(r.question_id);
+    for (const t of trendDays) for (const r of t.dayResponses) refIds.add(r.question_id);
+    const qList = await this.repo.getQuestionsByIds([...refIds]);
+    const qMap = new Map(qList.map(q => [q.id, q]));
+    const getQ = (id) => qMap.get(id);
+
+    const todayStats = calculateDailyStats(todayResponses, getQ);
+    const weakAreas = identifyWeakAreas(allResponses, getQ);
+
+    const trend = trendDays.map(({ d, dateStr, dayResponses }) => {
+      const stats = calculateDailyStats(dayResponses, getQ);
+      return {
         date: dateStr,
         day: d.toLocaleDateString('en-GB', { weekday: 'short' }),
         total: stats.total,
         correct: stats.correct,
         score: stats.score,
-      });
-    }
+      };
+    });
 
     // Overall
     const totalCorrect = allResponses.filter(r => r.correct).length;
@@ -48,7 +62,7 @@ export class AnalyticsService {
     // Subject breakdown
     const bySubject = {};
     for (const r of allResponses) {
-      const q = this.repo.getQuestion(r.question_id);
+      const q = qMap.get(r.question_id);
       if (!q) continue;
       if (!bySubject[q.subject]) bySubject[q.subject] = { total: 0, correct: 0 };
       bySubject[q.subject].total++;
@@ -70,17 +84,19 @@ export class AnalyticsService {
     };
   }
 
-  getLeaderboard(type = 'streak', limit = 10) {
-    const users = this.repo.all('users')
-      .filter(u => u.subscription_status === 'active' || u.subscription_status === 'trial');
+  async getLeaderboard(type = 'streak', limit = 10) {
+    const allUsers = await this.repo.all('users');
+    const users = allUsers.filter(u => u.subscription_status === 'active' || u.subscription_status === 'trial');
 
-    const rankings = users.map(user => {
+    const rankings = [];
+    for (const user of users) {
       if (type === 'streak') {
-        return {
+        rankings.push({
           userId: user.id,
           name: user.name || 'Scholar',
-          score: calculateStreak(this.repo.getAllUserResponseDates(user.id)),
-        };
+          score: calculateStreak(await this.repo.getAllUserResponseDates(user.id)),
+        });
+        continue;
       }
       // accuracy over last 7 days
       let total = 0, correct = 0;
@@ -88,22 +104,22 @@ export class AnalyticsService {
         const d = new Date();
         d.setDate(d.getDate() - i);
         const dateStr = d.toISOString().split('T')[0];
-        const responses = this.repo.getResponsesByDate(user.id, dateStr);
+        const responses = await this.repo.getResponsesByDate(user.id, dateStr);
         total += responses.length;
         correct += responses.filter(r => r.correct).length;
       }
-      return {
+      rankings.push({
         userId: user.id,
         name: user.name || 'Scholar',
         score: total >= 10 ? Math.round((correct / total) * 100) : 0,
-      };
-    });
+      });
+    }
 
     return rankings.filter(r => r.score > 0).sort((a, b) => b.score - a.score).slice(0, limit);
   }
 
-  getAdminStats() {
-    const users = this.repo.all('users');
+  async getAdminStats() {
+    const users = await this.repo.all('users');
     const active = users.filter(u => u.subscription_status === 'active').length;
     const trial = users.filter(u => u.subscription_status === 'trial').length;
     const expired = users.filter(u => u.subscription_status === 'expired').length;
@@ -120,8 +136,8 @@ export class AnalyticsService {
 
     return {
       users: { total: users.length, active, trial, expired },
-      revenue: { total: this.repo.getTotalRevenue(), currency: 'NGN' },
-      questions: { total: this.repo.getTotalQuestions() },
+      revenue: { total: await this.repo.getTotalRevenue(), currency: 'NGN' },
+      questions: { total: await this.repo.getTotalQuestions() },
       byExam,
       bySubject: Object.entries(bySubject).sort((a, b) => b[1] - a[1])
         .map(([id, count]) => ({ name: SUBJECTS[id]?.name || id, count })),
