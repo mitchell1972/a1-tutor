@@ -1,0 +1,13 @@
+# railway.toml — Railway deployment config
+
+[build]
+  builder = "nixpacks"
+
+[deploy]
+  startCommand = "node src/index.js"
+  healthcheckPath = "/health"
+  healthcheckTimeout = 10
+
+# Volume mount for persistent JSONL database
+[deploy.volumes]
+  data = "/app/data"

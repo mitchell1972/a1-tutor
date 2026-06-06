@@ -1,0 +1,104 @@
+// src/services/UserService.js
+// Orchestrates user registration, profile management, and access control.
+import { SUBJECTS, SUBJECT_PRESETS, EXAM_TYPES, QUESTIONS_PER_SUBJECT, TRIAL_DAYS } from '../config/subjects.js';
+import { checkAccess } from '../domain/SubscriptionValidator.js';
+
+export class UserService {
+  constructor({ repo }) {
+    this.repo = repo;
+  }
+
+  // ─── Registration ──────────────────────────────────
+
+  startRegistration(telegramId) {
+    const existing = this.repo.getUserByTelegram(telegramId);
+    if (existing) return { isReturning: true, user: existing };
+
+    return {
+      isReturning: false,
+      step: 'exam_type',
+      telegramId,
+    };
+  }
+
+  registerUser({ telegramId, examType, subjects, deliveryHour, deliveryMinute, channel }) {
+    // Validate
+    if (!EXAM_TYPES[examType?.toUpperCase()]) throw new Error(`Invalid exam type: ${examType}`);
+    if (!subjects || subjects.length < 2) throw new Error('Minimum 2 subjects required');
+    if (!subjects.includes('english')) subjects = ['english', ...subjects.filter(s => s !== 'english')];
+
+    const user = this.repo.createUser({
+      telegram_id: telegramId,
+      exam_type: examType,
+      subjects,
+      delivery_hour: deliveryHour ?? 7,
+      delivery_minute: deliveryMinute ?? 0,
+      channel: channel || 'telegram',
+      questions_per_subject: QUESTIONS_PER_SUBJECT,
+    });
+
+    return user;
+  }
+
+  // ─── Access ────────────────────────────────────────
+
+  checkUserAccess(userId) {
+    const user = this.repo.getUser(userId);
+    if (!user) return { valid: false, reason: 'not_found' };
+
+    const activeSub = this.repo.getActiveSubscription(userId);
+    return checkAccess(user, activeSub);
+  }
+
+  // ─── Profile ───────────────────────────────────────
+
+  getProfile(userId) {
+    const user = this.repo.getUser(userId);
+    if (!user) return null;
+
+    return {
+      id: user.id,
+      examType: EXAM_TYPES[user.exam_type?.toUpperCase()]?.label || user.exam_type,
+      subjects: (user.subjects || []).map(s => ({
+        id: s,
+        name: SUBJECTS[s]?.name || s,
+        icon: SUBJECTS[s]?.icon || '📝',
+      })),
+      deliveryTime: `${String(user.delivery_hour || 7).padStart(2, '0')}:${String(user.delivery_minute || 0).padStart(2, '0')} WAT`,
+      channel: user.channel,
+      questionsPerSubject: user.questions_per_subject || QUESTIONS_PER_SUBJECT,
+      subscriptionStatus: user.subscription_status,
+      trialDaysLeft: this._trialDaysLeft(user),
+    };
+  }
+
+  // ─── Helpers ───────────────────────────────────────
+
+  getSubjectNames(subjectIds) {
+    return subjectIds.map(s => SUBJECTS[s]?.name || s);
+  }
+
+  getSubjectIcons(subjectIds) {
+    return subjectIds.map(s => SUBJECTS[s]?.icon || '📝');
+  }
+
+  getPresets() {
+    return SUBJECT_PRESETS;
+  }
+
+  getExamTypes() {
+    return EXAM_TYPES;
+  }
+
+  getAllSubjects() {
+    return SUBJECTS;
+  }
+
+  _trialDaysLeft(user) {
+    if (user.subscription_status !== 'trial') return 0;
+    const trialStart = user.trial_start ? new Date(user.trial_start) : new Date();
+    const trialEnd = new Date(trialStart);
+    trialEnd.setDate(trialEnd.getDate() + TRIAL_DAYS);
+    return Math.max(0, Math.ceil((trialEnd - new Date()) / (1000 * 60 * 60 * 24)));
+  }
+}

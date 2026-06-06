@@ -1,0 +1,700 @@
+// scripts/seed-questions.js — Populate the question bank with JAMB/SSCE questions
+// Run: node scripts/seed-questions.js
+// Also exported for auto-seed on fresh deploys
+import 'dotenv/config';
+import { JsonlRepository } from '../src/infrastructure/repositories/JsonlRepository.js';
+
+const QUESTIONS = [
+  // ═══════════ ENGLISH LANGUAGE ═══════════
+  {
+    subject: 'english', exam: 'jamb', year: 2024, topic: 'lexis_and_structure', difficulty: 1,
+    text: 'Choose the option that best completes the sentence:\n\nThe chairman refused to _____ to the demands of the workers.',
+    options: { A: 'accede', B: 'exceed', C: 'concede', D: 'proceed' },
+    answer: 'A',
+    explanation: '"Accede to" means to agree to a demand or request. "Exceed" means to go beyond, "concede" means to admit defeat, and "proceed" means to continue.'
+  },
+  {
+    subject: 'english', exam: 'jamb', year: 2024, topic: 'antonyms_synonyms', difficulty: 1,
+    text: 'Choose the word that is NEAREST IN MEANING to the underlined word:\n\nThe professor\'s explanation was very LUCID.',
+    options: { A: 'confusing', B: 'clear', C: 'lengthy', D: 'complicated' },
+    answer: 'B',
+    explanation: '"Lucid" means clear and easy to understand. The nearest synonym is "clear".'
+  },
+  {
+    subject: 'english', exam: 'jamb', year: 2023, topic: 'lexis_and_structure', difficulty: 2,
+    text: 'Choose the option that best completes the sentence:\n\nThe students were warned not to take the principal\'s patience for _____.',
+    options: { A: 'granted', B: 'guarantee', C: 'certainty', D: 'acceptance' },
+    answer: 'A',
+    explanation: 'The correct idiom is "take for granted," meaning to fail to appreciate something properly.'
+  },
+  {
+    subject: 'english', exam: 'jamb', year: 2023, topic: 'comprehension', difficulty: 2,
+    text: 'In a comprehension passage, the phrase "between a rock and a hard place" means:',
+    options: { A: 'In a dangerous location', B: 'Faced with two difficult choices', C: 'Lost in the wilderness', D: 'Standing on unstable ground' },
+    answer: 'B',
+    explanation: '"Between a rock and a hard place" is an idiom meaning faced with two equally difficult or unpleasant alternatives.'
+  },
+  {
+    subject: 'english', exam: 'ssce', year: 2023, topic: 'figures_of_speech', difficulty: 2,
+    text: 'Identify the figure of speech:\n"The wind whispered through the trees."',
+    options: { A: 'Metaphor', B: 'Simile', C: 'Personification', D: 'Hyperbole' },
+    answer: 'C',
+    explanation: 'Personification gives human qualities to non-human things. The wind cannot literally whisper — that is a human action attributed to wind.'
+  },
+  {
+    subject: 'english', exam: 'jamb', year: 2022, topic: 'antonyms_synonyms', difficulty: 1,
+    text: 'Choose the word that is OPPOSITE in meaning:\n\nThe manager was very CORDIAL to the visitors.',
+    options: { A: 'friendly', B: 'hostile', C: 'polite', D: 'indifferent' },
+    answer: 'B',
+    explanation: '"Cordial" means warm and friendly. The opposite is "hostile," meaning unfriendly or antagonistic.'
+  },
+  {
+    subject: 'english', exam: 'jamb', year: 2022, topic: 'sentence_interpretation', difficulty: 2,
+    text: 'Interpret the sentence:\n"The new policy is a double-edged sword." This means the policy:',
+    options: { A: 'Is very dangerous', B: 'Has both advantages and disadvantages', C: 'Will cut costs in half', D: 'Is twice as effective' },
+    answer: 'B',
+    explanation: 'A "double-edged sword" refers to something that has both positive and negative consequences.'
+  },
+  {
+    subject: 'english', exam: 'ssce', year: 2024, topic: 'oral_english', difficulty: 1,
+    text: 'Which of these words has the same vowel sound as "seat"?',
+    options: { A: 'set', B: 'sit', C: 'beat', D: 'said' },
+    answer: 'C',
+    explanation: '"Seat" contains the long /iː/ vowel sound. "Beat" has the same /iː/ sound. The others have short vowels.'
+  },
+  {
+    subject: 'english', exam: 'jamb', year: 2024, topic: 'essay_writing', difficulty: 2,
+    text: 'In essay writing, the topic sentence of a paragraph should:',
+    options: { A: 'Be the last sentence', B: 'State the main idea of the paragraph', C: 'Provide supporting details', D: 'Summarise the entire essay' },
+    answer: 'B',
+    explanation: 'The topic sentence states the main idea of the paragraph and is usually placed at or near the beginning.'
+  },
+  {
+    subject: 'english', exam: 'jamb', year: 2023, topic: 'punctuation_and_spelling', difficulty: 1,
+    text: 'Which of these sentences is correctly punctuated?',
+    options: { A: "Its a beautiful day.", B: "It's a beautiful day.", C: "Its' a beautiful day.", D: "Its, a beautiful day." },
+    answer: 'B',
+    explanation: '"It\'s" (with an apostrophe) is the contraction of "it is." "Its" (without apostrophe) is the possessive form.'
+  },
+  {
+    subject: 'english', exam: 'ssce', year: 2023, topic: 'register', difficulty: 2,
+    text: 'In legal register, the phrase "without prejudice" means:',
+    options: { A: 'Without opinion', B: 'Without affecting legal rights', C: 'With bias', D: 'Without evidence' },
+    answer: 'B',
+    explanation: '"Without prejudice" is a legal term meaning that statements made in settlement negotiations cannot be used as evidence in court.'
+  },
+  {
+    subject: 'english', exam: 'jamb', year: 2022, topic: 'comprehension', difficulty: 3,
+    text: 'Read the passage and answer:\n"Despite the heavy downpour, the determined athlete completed the marathon, though his time was significantly slower than his personal best."\n\nWhat can be inferred about the athlete?',
+    options: { A: 'He won the marathon', B: 'He was not properly trained', C: 'He showed perseverance despite challenges', D: 'He was disqualified' },
+    answer: 'C',
+    explanation: 'The passage suggests the athlete faced difficulty (heavy downpour) but completed the race anyway, showing perseverance.'
+  },
+
+  // ═══════════ PHYSICS ═══════════
+  {
+    subject: 'physics', exam: 'jamb', year: 2024, topic: 'mechanics', difficulty: 1,
+    text: 'A body of mass 5 kg moving with a velocity of 10 m/s has kinetic energy of:',
+    options: { A: '50 J', B: '100 J', C: '250 J', D: '500 J' },
+    answer: 'C',
+    explanation: 'KE = ½mv² = ½ × 5 × 10² = ½ × 5 × 100 = 250 J'
+  },
+  {
+    subject: 'physics', exam: 'jamb', year: 2023, topic: 'electricity_magnetism', difficulty: 2,
+    text: 'Ohm\'s law states that the current through a conductor is directly proportional to the:',
+    options: { A: 'Resistance', B: 'Potential difference', C: 'Temperature', D: 'Length of the conductor' },
+    answer: 'B',
+    explanation: 'Ohm\'s law: V = IR. Current (I) is directly proportional to the potential difference (V) across the conductor, provided temperature remains constant.'
+  },
+  {
+    subject: 'physics', exam: 'jamb', year: 2024, topic: 'heat_energy', difficulty: 2,
+    text: 'The specific heat capacity of water is 4200 J/kgK. How much heat is required to raise the temperature of 2 kg of water by 15 K?',
+    options: { A: '63,000 J', B: '126,000 J', C: '31,500 J', D: '252,000 J' },
+    answer: 'B',
+    explanation: 'Q = mcΔθ = 2 × 4200 × 15 = 126,000 J'
+  },
+  {
+    subject: 'physics', exam: 'jamb', year: 2023, topic: 'light_optics', difficulty: 1,
+    text: 'Which of the following is NOT a property of light waves?',
+    options: { A: 'Reflection', B: 'Refraction', C: 'Diffraction', D: 'Convection' },
+    answer: 'D',
+    explanation: 'Convection is a method of heat transfer in fluids, not a property of light waves.'
+  },
+  {
+    subject: 'physics', exam: 'ssce', year: 2024, topic: 'waves', difficulty: 2,
+    text: 'A wave has a frequency of 50 Hz and a wavelength of 6 m. What is its velocity?',
+    options: { A: '8.33 m/s', B: '56 m/s', C: '300 m/s', D: '0.12 m/s' },
+    answer: 'C',
+    explanation: 'v = f × λ = 50 × 6 = 300 m/s'
+  },
+  {
+    subject: 'physics', exam: 'jamb', year: 2022, topic: 'mechanics', difficulty: 2,
+    text: 'A car accelerates uniformly from rest to 20 m/s in 10 seconds. What is its acceleration?',
+    options: { A: '0.5 m/s²', B: '2 m/s²', C: '10 m/s²', D: '200 m/s²' },
+    answer: 'B',
+    explanation: 'a = (v - u)/t = (20 - 0)/10 = 2 m/s²'
+  },
+  {
+    subject: 'physics', exam: 'jamb', year: 2024, topic: 'sound', difficulty: 3,
+    text: 'The speed of sound in air at 0°C is 330 m/s. At what temperature will the speed be 360 m/s?',
+    options: { A: '27°C', B: '54°C', C: '81°C', D: '108°C' },
+    answer: 'B',
+    explanation: 'v ∝ √T (in Kelvin). v₂/v₁ = √(T₂/T₁). 360/330 = √(T₂/273). Solving: T₂ = 273 × (360/330)² ≈ 327 K = 54°C.'
+  },
+  {
+    subject: 'physics', exam: 'ssce', year: 2023, topic: 'simple_machines', difficulty: 1,
+    text: 'A lever has a load of 200 N at 0.5 m from the fulcrum. What effort is needed at 2 m from the fulcrum to balance it?',
+    options: { A: '25 N', B: '50 N', C: '100 N', D: '400 N' },
+    answer: 'B',
+    explanation: 'Load × Load distance = Effort × Effort distance. 200 × 0.5 = E × 2. E = 100/2 = 50 N.'
+  },
+  {
+    subject: 'physics', exam: 'jamb', year: 2023, topic: 'gravitational_field', difficulty: 2,
+    text: 'The acceleration due to gravity on the Moon is approximately 1/6 of that on Earth. If a man weighs 720 N on Earth, what would he weigh on the Moon?',
+    options: { A: '120 N', B: '360 N', C: '720 N', D: '4320 N' },
+    answer: 'A',
+    explanation: 'Weight on Moon = Weight on Earth ÷ 6 = 720 ÷ 6 = 120 N. Weight changes but mass remains constant.'
+  },
+
+  // ═══════════ CHEMISTRY ═══════════
+  {
+    subject: 'chemistry', exam: 'jamb', year: 2024, topic: 'atomic_structure', difficulty: 1,
+    text: 'The atomic number of an element is 11. What is its electronic configuration?',
+    options: { A: '2, 8, 2', B: '2, 8, 1', C: '2, 8, 8', D: '2, 8, 3' },
+    answer: 'B',
+    explanation: 'Atomic number 11 is Sodium (Na). Electronic configuration: 2, 8, 1 (1s² 2s² 2p⁶ 3s¹).'
+  },
+  {
+    subject: 'chemistry', exam: 'jamb', year: 2023, topic: 'acids_bases_salts', difficulty: 1,
+    text: 'Which of the following is a strong acid?',
+    options: { A: 'Ethanoic acid', B: 'Carbonic acid', C: 'Hydrochloric acid', D: 'Citric acid' },
+    answer: 'C',
+    explanation: 'Hydrochloric acid (HCl) completely dissociates in water and is a strong acid. The others are weak acids.'
+  },
+  {
+    subject: 'chemistry', exam: 'jamb', year: 2024, topic: 'stoichiometry', difficulty: 2,
+    text: 'How many moles are in 40 g of NaOH? (Na = 23, O = 16, H = 1)',
+    options: { A: '0.5 mol', B: '1 mol', C: '2 mol', D: '4 mol' },
+    answer: 'B',
+    explanation: 'Molar mass of NaOH = 23 + 16 + 1 = 40 g/mol. Number of moles = mass/molar mass = 40/40 = 1 mol.'
+  },
+  {
+    subject: 'chemistry', exam: 'ssce', year: 2024, topic: 'organic_chemistry', difficulty: 2,
+    text: 'The functional group present in alkanols is:',
+    options: { A: '-COOH', B: '-CHO', C: '-OH', D: '-CO-' },
+    answer: 'C',
+    explanation: 'Alkanols (alcohols) contain the hydroxyl functional group (-OH). -COOH is carboxylic acid, -CHO is aldehyde.'
+  },
+  {
+    subject: 'chemistry', exam: 'jamb', year: 2022, topic: 'chemical_bonding', difficulty: 2,
+    text: 'Which type of bond exists in sodium chloride (NaCl)?',
+    options: { A: 'Covalent bond', B: 'Metallic bond', C: 'Ionic bond', D: 'Hydrogen bond' },
+    answer: 'C',
+    explanation: 'NaCl is formed by the transfer of an electron from sodium (metal) to chlorine (non-metal), forming an ionic bond.'
+  },
+  {
+    subject: 'chemistry', exam: 'jamb', year: 2023, topic: 'periodic_table', difficulty: 1,
+    text: 'Elements in the same group of the periodic table have the same number of:',
+    options: { A: 'Electron shells', B: 'Protons', C: 'Valence electrons', D: 'Neutrons' },
+    answer: 'C',
+    explanation: 'Elements in the same group have the same number of valence electrons, which determines their similar chemical properties.'
+  },
+  {
+    subject: 'chemistry', exam: 'ssce', year: 2023, topic: 'redox_reactions', difficulty: 3,
+    text: 'In the reaction: Zn + CuSO₄ → ZnSO₄ + Cu, which species is reduced?',
+    options: { A: 'Zn', B: 'Cu²⁺', C: 'SO₄²⁻', D: 'Zn²⁺' },
+    answer: 'B',
+    explanation: 'Reduction is gain of electrons. Cu²⁺ gains 2 electrons to become Cu (copper metal). Zn is oxidised (loses electrons).'
+  },
+  {
+    subject: 'chemistry', exam: 'jamb', year: 2024, topic: 'electrochemistry', difficulty: 3,
+    text: 'In the electrolysis of dilute sodium chloride solution using inert electrodes, the gas produced at the anode is:',
+    options: { A: 'Hydrogen', B: 'Chlorine', C: 'Oxygen', D: 'Nitrogen' },
+    answer: 'C',
+    explanation: 'In dilute NaCl, water is preferentially oxidised at the anode, producing oxygen gas. In concentrated NaCl, chlorine is produced.'
+  },
+  {
+    subject: 'chemistry', exam: 'jamb', year: 2022, topic: 'chemical_kinetics', difficulty: 2,
+    text: 'A catalyst increases the rate of a chemical reaction by:',
+    options: { A: 'Increasing the temperature', B: 'Lowering the activation energy', C: 'Increasing the concentration of reactants', D: 'Decreasing the pressure' },
+    answer: 'B',
+    explanation: 'A catalyst provides an alternative pathway with lower activation energy, allowing more reactant particles to have sufficient energy to react.'
+  },
+
+  // ═══════════ BIOLOGY ═══════════
+  {
+    subject: 'biology', exam: 'jamb', year: 2024, topic: 'cell_biology', difficulty: 1,
+    text: 'Which organelle is known as the "powerhouse of the cell"?',
+    options: { A: 'Nucleus', B: 'Ribosome', C: 'Mitochondrion', D: 'Golgi apparatus' },
+    answer: 'C',
+    explanation: 'Mitochondria produce ATP through cellular respiration, earning them the nickname "powerhouse of the cell."'
+  },
+  {
+    subject: 'biology', exam: 'jamb', year: 2023, topic: 'genetics', difficulty: 2,
+    text: 'If a homozygous tall plant (TT) is crossed with a homozygous short plant (tt), what percentage of the F₁ generation will be tall?',
+    options: { A: '25%', B: '50%', C: '75%', D: '100%' },
+    answer: 'D',
+    explanation: 'All F₁ offspring will be Tt (heterozygous tall). Since tall (T) is dominant over short (t), 100% will be tall.'
+  },
+  {
+    subject: 'biology', exam: 'jamb', year: 2024, topic: 'human_physiology', difficulty: 2,
+    text: 'Which blood vessel carries oxygenated blood from the lungs to the heart?',
+    options: { A: 'Pulmonary artery', B: 'Pulmonary vein', C: 'Aorta', D: 'Vena cava' },
+    answer: 'B',
+    explanation: 'The pulmonary vein is the only vein that carries oxygenated blood — from the lungs to the left atrium of the heart.'
+  },
+  {
+    subject: 'biology', exam: 'ssce', year: 2023, topic: 'ecology', difficulty: 2,
+    text: 'In a food chain, the organism that feeds on producers is called a:',
+    options: { A: 'Autotroph', B: 'Primary consumer', C: 'Secondary consumer', D: 'Decomposer' },
+    answer: 'B',
+    explanation: 'Primary consumers (herbivores) feed directly on producers (plants). Secondary consumers feed on primary consumers.'
+  },
+  {
+    subject: 'biology', exam: 'jamb', year: 2022, topic: 'photosynthesis', difficulty: 1,
+    text: 'The green pigment responsible for trapping light energy during photosynthesis is:',
+    options: { A: 'Xanthophyll', B: 'Carotene', C: 'Chlorophyll', D: 'Haemoglobin' },
+    answer: 'C',
+    explanation: 'Chlorophyll, found in chloroplasts, absorbs light energy (mainly red and blue wavelengths) for photosynthesis.'
+  },
+  {
+    subject: 'biology', exam: 'jamb', year: 2023, topic: 'excretion', difficulty: 3,
+    text: 'Which part of the nephron is responsible for the reabsorption of glucose?',
+    options: { A: 'Bowman\'s capsule', B: 'Loop of Henle', C: 'Proximal convoluted tubule', D: 'Collecting duct' },
+    answer: 'C',
+    explanation: 'The proximal convoluted tubule (PCT) reabsorbs glucose, amino acids, and most water and salts back into the blood.'
+  },
+  {
+    subject: 'biology', exam: 'ssce', year: 2024, topic: 'reproduction', difficulty: 1,
+    text: 'Which of the following is a method of asexual reproduction?',
+    options: { A: 'Fertilization', B: 'Binary fission', C: 'Pollination', D: 'Conjugation' },
+    answer: 'B',
+    explanation: 'Binary fission is asexual reproduction in which a single organism divides into two identical daughter cells (e.g., in bacteria and amoeba).'
+  },
+  {
+    subject: 'biology', exam: 'jamb', year: 2024, topic: 'nervous_system', difficulty: 2,
+    text: 'The gap between two neurons where neurotransmitters are released is called the:',
+    options: { A: 'Axon', B: 'Dendrite', C: 'Synapse', D: 'Myelin sheath' },
+    answer: 'C',
+    explanation: 'The synapse is the junction between two neurons where neurotransmitters transmit the nerve impulse from one neuron to the next.'
+  },
+
+  // ═══════════ ECONOMICS ═══════════
+  {
+    subject: 'economics', exam: 'jamb', year: 2024, topic: 'demand_supply', difficulty: 1,
+    text: 'According to the law of demand, when the price of a good increases, the quantity demanded:',
+    options: { A: 'Increases', B: 'Decreases', C: 'Remains constant', D: 'Becomes zero' },
+    answer: 'B',
+    explanation: 'The law of demand states that, ceteris paribus (all else being equal), as price increases, quantity demanded decreases (inverse relationship).'
+  },
+  {
+    subject: 'economics', exam: 'jamb', year: 2023, topic: 'market_structures', difficulty: 2,
+    text: 'A market structure with many sellers offering differentiated products is called:',
+    options: { A: 'Perfect competition', B: 'Monopoly', C: 'Monopolistic competition', D: 'Oligopoly' },
+    answer: 'C',
+    explanation: 'Monopolistic competition features many sellers, differentiated products, and free entry/exit. Examples include restaurants and clothing brands.'
+  },
+  {
+    subject: 'economics', exam: 'jamb', year: 2024, topic: 'national_income', difficulty: 2,
+    text: 'GDP measured at current market prices is called:',
+    options: { A: 'Real GDP', B: 'Nominal GDP', C: 'GDP per capita', D: 'GDP deflator' },
+    answer: 'B',
+    explanation: 'Nominal GDP is measured at current prices. Real GDP is adjusted for inflation and measured at constant prices.'
+  },
+  {
+    subject: 'economics', exam: 'ssce', year: 2023, topic: 'inflation', difficulty: 1,
+    text: 'Inflation is best defined as:',
+    options: { A: 'An increase in the price of a single good', B: 'A sustained increase in the general price level', C: 'A decrease in the value of foreign currency', D: 'An increase in government spending' },
+    answer: 'B',
+    explanation: 'Inflation is a sustained (persistent) increase in the general price level of goods and services in an economy over time.'
+  },
+  {
+    subject: 'economics', exam: 'jamb', year: 2022, topic: 'money_banking', difficulty: 2,
+    text: 'Which of the following is a function of the Central Bank of Nigeria?',
+    options: { A: 'Accepting deposits from individuals', B: 'Granting personal loans', C: 'Issuing currency', D: 'Providing mortgage services' },
+    answer: 'C',
+    explanation: 'Issuing currency is a core function of the CBN. Accepting deposits and granting loans are functions of commercial banks.'
+  },
+  {
+    subject: 'economics', exam: 'jamb', year: 2023, topic: 'international_trade', difficulty: 3,
+    text: 'If Nigeria can produce crude oil at a lower opportunity cost than Ghana, Nigeria is said to have:',
+    options: { A: 'Absolute advantage', B: 'Comparative advantage', C: 'Terms of trade advantage', D: 'Balance of trade advantage' },
+    answer: 'B',
+    explanation: 'Comparative advantage exists when a country can produce a good at a lower opportunity cost than another country.'
+  },
+
+  // ═══════════ GOVERNMENT ═══════════
+  {
+    subject: 'government', exam: 'jamb', year: 2024, topic: 'arms_of_government', difficulty: 1,
+    text: 'The principle that ensures no arm of government becomes too powerful is called:',
+    options: { A: 'Rule of law', B: 'Separation of powers', C: 'Judicial review', D: 'Federal character' },
+    answer: 'B',
+    explanation: 'Separation of powers divides government into three arms — Executive, Legislature, and Judiciary — each acting as a check on the others.'
+  },
+  {
+    subject: 'government', exam: 'jamb', year: 2023, topic: 'constitutional_development', difficulty: 2,
+    text: 'The 1999 Constitution of Nigeria establishes which system of government?',
+    options: { A: 'Unitary system', B: 'Confederal system', C: 'Federal system', D: 'Parliamentary system' },
+    answer: 'C',
+    explanation: 'The 1999 Constitution establishes Nigeria as a Federal Republic with a presidential system of government.'
+  },
+  {
+    subject: 'government', exam: 'ssce', year: 2022, topic: 'electoral_systems', difficulty: 2,
+    text: 'The electoral body responsible for conducting elections in Nigeria is:',
+    options: { A: 'NECO', B: 'JAMB', C: 'INEC', D: 'NPC' },
+    answer: 'C',
+    explanation: 'INEC (Independent National Electoral Commission) is responsible for organising and conducting elections in Nigeria.'
+  },
+  {
+    subject: 'government', exam: 'jamb', year: 2024, topic: 'political_systems', difficulty: 3,
+    text: 'Which of the following is a feature of a parliamentary system of government?',
+    options: { A: 'Fixed term for the executive', B: 'Separation of head of state and head of government', C: 'Direct election of the prime minister', D: 'The executive is not part of the legislature' },
+    answer: 'B',
+    explanation: 'In a parliamentary system, the head of state (e.g., monarch or president) is separate from the head of government (prime minister), who leads the executive from the legislature.'
+  },
+
+  // ═══════════ MATHEMATICS ═══════════
+  {
+    subject: 'mathematics', exam: 'jamb', year: 2024, topic: 'algebra', difficulty: 1,
+    text: 'Solve for x: 3x - 7 = 14',
+    options: { A: 'x = 3', B: 'x = 5', C: 'x = 7', D: 'x = 21' },
+    answer: 'C',
+    explanation: '3x - 7 = 14. Add 7 to both sides: 3x = 21. Divide by 3: x = 7.'
+  },
+  {
+    subject: 'mathematics', exam: 'jamb', year: 2023, topic: 'probability', difficulty: 1,
+    text: 'A fair coin is tossed twice. What is the probability of getting two heads?',
+    options: { A: '1/8', B: '1/4', C: '1/2', D: '3/4' },
+    answer: 'B',
+    explanation: 'P(HH) = P(H) × P(H) = 1/2 × 1/2 = 1/4. The sample space is {HH, HT, TH, TT}.'
+  },
+  {
+    subject: 'mathematics', exam: 'jamb', year: 2024, topic: 'geometry', difficulty: 2,
+    text: 'The area of a circle with radius 7 cm is: (Take π = 22/7)',
+    options: { A: '44 cm²', B: '77 cm²', C: '154 cm²', D: '308 cm²' },
+    answer: 'C',
+    explanation: 'Area = πr² = (22/7) × 7 × 7 = 22 × 7 = 154 cm².'
+  },
+  {
+    subject: 'mathematics', exam: 'ssce', year: 2023, topic: 'trigonometry', difficulty: 2,
+    text: 'In a right-angled triangle, if sin θ = 3/5, what is cos θ?',
+    options: { A: '5/3', B: '4/5', C: '3/4', D: '5/4' },
+    answer: 'B',
+    explanation: 'If sin θ = 3/5, then opposite = 3, hypotenuse = 5. Using Pythagoras: adjacent = √(25 - 9) = 4. cos θ = adjacent/hypotenuse = 4/5.'
+  },
+  {
+    subject: 'mathematics', exam: 'jamb', year: 2022, topic: 'number_bases', difficulty: 2,
+    text: 'Convert 1011₂ (binary) to base 10.',
+    options: { A: '9', B: '11', C: '13', D: '15' },
+    answer: 'B',
+    explanation: '1011₂ = 1×2³ + 0×2² + 1×2¹ + 1×2⁰ = 8 + 0 + 2 + 1 = 11'
+  },
+  {
+    subject: 'mathematics', exam: 'jamb', year: 2023, topic: 'statistics', difficulty: 1,
+    text: 'Find the mean of: 4, 8, 12, 16, 20',
+    options: { A: '8', B: '10', C: '12', D: '14' },
+    answer: 'C',
+    explanation: 'Mean = sum/n = (4 + 8 + 12 + 16 + 20)/5 = 60/5 = 12'
+  },
+  {
+    subject: 'mathematics', exam: 'jamb', year: 2024, topic: 'sets', difficulty: 2,
+    text: 'If A = {1, 2, 3, 4} and B = {3, 4, 5, 6}, find A ∩ B.',
+    options: { A: '{1, 2, 3, 4, 5, 6}', B: '{3, 4}', C: '{1, 2}', D: '{5, 6}' },
+    answer: 'B',
+    explanation: 'A ∩ B (intersection) contains elements common to both sets: {3, 4}.'
+  },
+  // ═══════════ UNIVERSITY GST ═══════════
+  {
+    subject: 'gst_english', exam: 'gst', year: 2024, topic: 'academic_writing', difficulty: 1,
+    text: 'In academic writing, what does APA stand for?',
+    options: { A: 'American Psychological Association', B: 'Academic Paper Association', C: 'Author Presentation Authority', D: 'American Publishing Association' },
+    answer: 'A',
+    explanation: 'APA (American Psychological Association) is the most widely used citation style in Nigerian universities for social sciences and education.'
+  },
+  {
+    subject: 'gst_english', exam: 'gst', year: 2024, topic: 'referencing_styles', difficulty: 1,
+    text: 'Which referencing style uses numbered citations in square brackets?',
+    options: { A: 'APA', B: 'MLA', C: 'IEEE', D: 'Harvard' },
+    answer: 'C',
+    explanation: 'IEEE (Institute of Electrical and Electronics Engineers) uses numbered references in square brackets [1], common in engineering and computer science.'
+  },
+  {
+    subject: 'gst_english', exam: 'gst', year: 2023, topic: 'grammar_review', difficulty: 1,
+    text: 'Identify the error: "Each of the students have submitted their assignment."',
+    options: { A: 'have → has', B: 'their → his', C: 'students → student', D: 'No error' },
+    answer: 'A',
+    explanation: '"Each" is singular, so the verb should be "has" not "have." "Each of the students has submitted..."'
+  },
+  {
+    subject: 'gst_english', exam: 'gst', year: 2024, topic: 'public_speaking', difficulty: 2,
+    text: 'The primary purpose of the introduction in a speech is to:',
+    options: { A: 'Summarise the main points', B: 'Capture attention and state the purpose', C: 'Provide supporting evidence', D: 'Ask rhetorical questions' },
+    answer: 'B',
+    explanation: 'A speech introduction should hook the audience and establish the purpose/thesis. Supporting evidence comes in the body.'
+  },
+  {
+    subject: 'gst_logic', exam: 'gst', year: 2024, topic: 'fallacies', difficulty: 1,
+    text: 'When someone attacks the person making an argument rather than the argument itself, this fallacy is called:',
+    options: { A: 'Straw man', B: 'Ad hominem', C: 'False dilemma', D: 'Slippery slope' },
+    answer: 'B',
+    explanation: 'Ad hominem (Latin: "to the person") attacks character rather than engaging with the argument. A straw man misrepresents the argument.'
+  },
+  {
+    subject: 'gst_logic', exam: 'gst', year: 2023, topic: 'deductive_reasoning', difficulty: 2,
+    text: 'All mammals are warm-blooded. Whales are mammals. Therefore, whales are warm-blooded. This is an example of:',
+    options: { A: 'Inductive reasoning', B: 'Deductive reasoning', C: 'Abductive reasoning', D: 'Analogical reasoning' },
+    answer: 'B',
+    explanation: 'Deductive reasoning moves from general premises to a specific, logically certain conclusion (syllogism). Inductive moves from specific observations to general conclusions.'
+  },
+  {
+    subject: 'gst_logic', exam: 'gst', year: 2024, topic: 'truth_tables', difficulty: 2,
+    text: 'In propositional logic, if p is TRUE and q is FALSE, what is the truth value of p → q?',
+    options: { A: 'TRUE', B: 'FALSE', C: 'Undefined', D: 'Both true and false' },
+    answer: 'B',
+    explanation: 'The implication p → q (if p then q) is FALSE only when p is TRUE and q is FALSE. In all other cases it is TRUE.'
+  },
+  {
+    subject: 'gst_nigeria', exam: 'gst', year: 2024, topic: 'ethnic_groups', difficulty: 1,
+    text: 'Nigeria has approximately how many distinct ethnic groups?',
+    options: { A: 'About 100', B: 'About 250', C: 'About 400', D: 'Over 500' },
+    answer: 'B',
+    explanation: 'Nigeria has approximately 250 ethnic groups, with Hausa, Yoruba, and Igbo being the three largest.'
+  },
+  {
+    subject: 'gst_nigeria', exam: 'gst', year: 2023, topic: 'pre_colonial_societies', difficulty: 2,
+    text: 'The Oyo Empire was a pre-colonial kingdom of which ethnic group?',
+    options: { A: 'Hausa', B: 'Igbo', C: 'Yoruba', D: 'Fulani' },
+    answer: 'C',
+    explanation: 'The Oyo Empire was a powerful Yoruba empire in present-day southwestern Nigeria, reaching its peak in the 17th-18th centuries.'
+  },
+  {
+    subject: 'gst_nigeria', exam: 'gst', year: 2024, topic: 'contemporary_issues', difficulty: 2,
+    text: 'The National Youth Service Corps (NYSC) was established in which year?',
+    options: { A: '1960', B: '1963', C: '1973', D: '1979' },
+    answer: 'C',
+    explanation: 'NYSC was established in 1973 by Decree No. 24 under General Yakubu Gowon to promote national unity after the civil war.'
+  },
+  {
+    subject: 'gst_entrepreneurship', exam: 'gst', year: 2024, topic: 'business_ideas', difficulty: 1,
+    text: 'A feasibility study primarily assesses:',
+    options: { A: 'The personality of the entrepreneur', B: 'Whether a business idea is viable', C: 'Tax obligations only', D: 'Marketing strategies only' },
+    answer: 'B',
+    explanation: 'A feasibility study evaluates the viability of a business idea by analysing market, technical, financial, and operational factors.'
+  },
+  {
+    subject: 'gst_entrepreneurship', exam: 'gst', year: 2023, topic: 'financial_literacy', difficulty: 1,
+    text: 'Break-even point is where:',
+    options: { A: 'Total revenue > Total costs', B: 'Total revenue = Total costs', C: 'Profit is maximised', D: 'Sales equal production capacity' },
+    answer: 'B',
+    explanation: 'The break-even point is where total revenue equals total costs (fixed + variable). Below it you lose money; above it you make profit.'
+  },
+  {
+    subject: 'gst_computer', exam: 'gst', year: 2024, topic: 'computer_hardware', difficulty: 1,
+    text: 'CPU stands for:',
+    options: { A: 'Central Processing Unit', B: 'Computer Personal Unit', C: 'Central Program Utility', D: 'Core Processing Unit' },
+    answer: 'A',
+    explanation: 'CPU (Central Processing Unit) is the primary component that executes instructions — the brain of the computer.'
+  },
+  {
+    subject: 'gst_computer', exam: 'gst', year: 2023, topic: 'ms_office', difficulty: 1,
+    text: 'In Microsoft Excel, what does the formula =SUM(A1:A10) do?',
+    options: { A: 'Averages cells A1 to A10', B: 'Adds all values from A1 to A10', C: 'Counts non-empty cells in A1 to A10', D: 'Multiplies A1 by A10' },
+    answer: 'B',
+    explanation: 'SUM() adds all numeric values in the specified range. AVERAGE() would give the mean, COUNT() gives the count.'
+  },
+  {
+    subject: 'gst_statistics', exam: 'gst', year: 2024, topic: 'measures_central_tendency', difficulty: 1,
+    text: 'The median of the dataset [2, 5, 7, 9, 12] is:',
+    options: { A: '5', B: '7', C: '9', D: '35' },
+    answer: 'B',
+    explanation: 'The median is the middle value when data is sorted. [2, 5, 7, 9, 12] — 7 is the 3rd (middle) value.'
+  },
+  {
+    subject: 'gst_statistics', exam: 'gst', year: 2023, topic: 'probability_basics', difficulty: 2,
+    text: 'A bag has 3 red and 2 blue balls. The probability of drawing a red ball is:',
+    options: { A: '1/5', B: '2/5', C: '3/5', D: '0.6' },
+    answer: 'C',
+    explanation: 'P(red) = number of red / total = 3/5. Both C and D are numerically equivalent but 3/5 is the fractional form.'
+  },
+
+  // ═══════════ UNIVERSITY FACULTY COURSES ═══════════
+
+  // ─── Constitutional Law ──────────────────────────
+  {
+    subject: 'constitutional_law', exam: 'squad', year: 2024, topic: 'fundamental_rights', difficulty: 1,
+    text: 'Which chapter of the 1999 Nigerian Constitution contains fundamental rights?',
+    options: { A: 'Chapter I', B: 'Chapter II', C: 'Chapter IV', D: 'Chapter VI' },
+    answer: 'C',
+    explanation: 'Chapter IV (Sections 33-46) of the 1999 Constitution contains the fundamental rights provisions, including right to life, dignity, liberty, and fair hearing.'
+  },
+  {
+    subject: 'constitutional_law', exam: 'squad', year: 2023, topic: 'separation_of_powers', difficulty: 2,
+    text: 'The doctrine of separation of powers was most influentially articulated by:',
+    options: { A: 'John Locke', B: 'Thomas Hobbes', C: 'Montesquieu', D: 'Jean-Jacques Rousseau' },
+    answer: 'C',
+    explanation: 'Baron de Montesquieu, in "The Spirit of the Laws" (1748), articulated the tripartite separation into executive, legislative, and judicial branches.'
+  },
+  {
+    subject: 'nigerian_legal_system', exam: 'squad', year: 2024, topic: 'court_hierarchy', difficulty: 1,
+    text: 'The highest court in Nigeria is the:',
+    options: { A: 'Court of Appeal', B: 'Federal High Court', C: 'Supreme Court', D: 'National Industrial Court' },
+    answer: 'C',
+    explanation: 'The Supreme Court of Nigeria is the highest court, established under Section 230 of the 1999 Constitution. Its decisions are final and binding on all other courts.'
+  },
+  {
+    subject: 'nigerian_legal_system', exam: 'squad', year: 2023, topic: 'sources_of_law', difficulty: 2,
+    text: 'Which of the following is NOT a primary source of Nigerian law?',
+    options: { A: 'The Constitution', B: 'Judicial precedent', C: 'Customary law', D: 'Law textbooks' },
+    answer: 'D',
+    explanation: 'Law textbooks are secondary sources — they describe and analyse the law but are not binding authority. The Constitution, statutes, case law, and customary law are primary sources.'
+  },
+
+  // ─── Anatomy ────────────────────────────────────
+  {
+    subject: 'anatomy', exam: 'squad', year: 2024, topic: 'skeletal_system', difficulty: 1,
+    text: 'How many bones are in the adult human body?',
+    options: { A: '186', B: '206', C: '226', D: '306' },
+    answer: 'B',
+    explanation: 'The adult human skeleton has 206 bones. Babies are born with about 270, but some fuse together during growth.'
+  },
+  {
+    subject: 'anatomy', exam: 'squad', year: 2023, topic: 'cardiovascular', difficulty: 2,
+    text: 'Which chamber of the heart pumps oxygenated blood to the body?',
+    options: { A: 'Right atrium', B: 'Right ventricle', C: 'Left atrium', D: 'Left ventricle' },
+    answer: 'D',
+    explanation: 'The left ventricle pumps oxygenated blood through the aorta to the systemic circulation. The right ventricle pumps deoxygenated blood to the lungs.'
+  },
+  {
+    subject: 'physiology', exam: 'squad', year: 2024, topic: 'homeostasis', difficulty: 1,
+    text: 'Homeostasis refers to:',
+    options: { A: 'Cell division', B: 'Maintenance of a stable internal environment', C: 'Energy production', D: 'Waste elimination' },
+    answer: 'B',
+    explanation: 'Homeostasis is the body\'s ability to maintain a stable internal environment (temperature, pH, glucose, water balance) despite external changes.'
+  },
+  {
+    subject: 'biochemistry', exam: 'squad', year: 2024, topic: 'enzymes', difficulty: 2,
+    text: 'Enzymes function by:',
+    options: { A: 'Increasing activation energy', B: 'Lowering activation energy', C: 'Changing the equilibrium constant', D: 'Being consumed in the reaction' },
+    answer: 'B',
+    explanation: 'Enzymes are biological catalysts that lower the activation energy of a reaction, allowing it to proceed faster. They are not consumed and do not change the equilibrium.'
+  },
+
+  // ─── Engineering Mathematics ─────────────────────
+  {
+    subject: 'engineering_math', exam: 'squad', year: 2024, topic: 'differential_equations', difficulty: 2,
+    text: 'The order of the differential equation d²y/dx² + 3dy/dx + 2y = 0 is:',
+    options: { A: '1', B: '2', C: '3', D: '0' },
+    answer: 'B',
+    explanation: 'The order of a differential equation is the highest derivative present. Here d²y/dx² is the second derivative, so the order is 2.'
+  },
+  {
+    subject: 'engineering_math', exam: 'squad', year: 2023, topic: 'linear_algebra', difficulty: 2,
+    text: 'If matrix A has dimensions 3×4 and matrix B has dimensions 4×2, the product AB will have dimensions:',
+    options: { A: '3×2', B: '4×4', C: '3×4', D: '2×3' },
+    answer: 'A',
+    explanation: 'For matrix multiplication: (m×n) × (n×p) = (m×p). Here 3×4 × 4×2 = 3×2.'
+  },
+  {
+    subject: 'electrical_circuits', exam: 'squad', year: 2024, topic: 'ohms_law', difficulty: 1,
+    text: 'If a 12V battery is connected to a 4Ω resistor, the current flowing is:',
+    options: { A: '0.33A', B: '3A', C: '48A', D: '16A' },
+    answer: 'B',
+    explanation: 'Ohm\'s Law: I = V/R = 12V/4Ω = 3A.'
+  },
+
+  // ─── Economics ───────────────────────────────────
+  {
+    subject: 'microeconomics', exam: 'squad', year: 2024, topic: 'elasticity', difficulty: 2,
+    text: 'If a 10% increase in price leads to a 5% decrease in quantity demanded, demand is:',
+    options: { A: 'Perfectly elastic', B: 'Elastic', C: 'Inelastic', D: 'Unit elastic' },
+    answer: 'C',
+    explanation: 'Price elasticity = %ΔQ/%ΔP = 5/10 = 0.5. Since |0.5| < 1, demand is inelastic — quantity changes less than proportionally to price.'
+  },
+  {
+    subject: 'macroeconomics', exam: 'squad', year: 2024, topic: 'gdp_measurement', difficulty: 1,
+    text: 'GDP measured using current market prices is called:',
+    options: { A: 'Real GDP', B: 'Nominal GDP', C: 'GDP per capita', D: 'Purchasing power parity GDP' },
+    answer: 'B',
+    explanation: 'Nominal GDP is measured at current prices. Real GDP adjusts for inflation, showing actual growth in output.'
+  },
+
+  // ─── Political Science ───────────────────────────
+  {
+    subject: 'political_science', exam: 'squad', year: 2024, topic: 'political_ideologies', difficulty: 1,
+    text: 'Which ideology advocates for collective ownership of the means of production?',
+    options: { A: 'Liberalism', B: 'Conservatism', C: 'Socialism', D: 'Fascism' },
+    answer: 'C',
+    explanation: 'Socialism advocates for collective/social ownership of production, in contrast to liberalism which supports private property and free markets.'
+  },
+  {
+    subject: 'sociology', exam: 'squad', year: 2024, topic: 'social_stratification', difficulty: 1,
+    text: 'A caste system is a form of:',
+    options: { A: 'Open stratification', B: 'Closed stratification', C: 'Economic class only', D: 'Achieved status' },
+    answer: 'B',
+    explanation: 'A caste system is closed stratification — social position is ascribed at birth and mobility between castes is not permitted. Class systems are more open.'
+  },
+
+  // ═══════════ POST-UTME ═══════════
+  {
+    subject: 'english', exam: 'post_utme', year: 2024, topic: 'comprehension', difficulty: 2,
+    text: '"The Chairman\'s speech was a tour de force that left the audience spellbound." The expression "tour de force" means:',
+    options: { A: 'A long and boring speech', B: 'A display of great skill', C: 'A tour of the facilities', D: 'A forceful argument' },
+    answer: 'B',
+    explanation: '"Tour de force" (French) means an impressive performance or achievement demonstrating exceptional skill.'
+  },
+  {
+    subject: 'mathematics', exam: 'post_utme', year: 2024, topic: 'algebra', difficulty: 2,
+    text: 'If 2ˣ⁺¹ = 32, find x.',
+    options: { A: '3', B: '4', C: '5', D: '6' },
+    answer: 'B',
+    explanation: '32 = 2⁵, so 2ˣ⁺¹ = 2⁵. Therefore x + 1 = 5, x = 4.'
+  },
+  {
+    subject: 'physics', exam: 'post_utme', year: 2023, topic: 'mechanics', difficulty: 2,
+    text: 'A stone is thrown vertically upward with a velocity of 20 m/s. How high does it go? (g = 10 m/s²)',
+    options: { A: '10m', B: '20m', C: '30m', D: '40m' },
+    answer: 'B',
+    explanation: 'At maximum height, v = 0. Using v² = u² - 2gh: 0 = 400 - 20h, h = 20m.'
+  },
+];
+
+console.log(`📝 Seeding ${QUESTIONS.length} questions...`);
+
+// Only seed if empty
+const existingCount = db.count('questions');
+if (existingCount > 0) {
+  console.log(`✅ ${existingCount} questions already in bank. Skipping seed.`);
+  process.exit(0);
+}
+
+/**
+ * Seed questions into the given repository.
+ * Returns the number of questions inserted.
+ */
+export async function seed(repo) {
+  let count = 0;
+  for (const q of QUESTIONS) {
+    repo.addQuestion(q);
+    count++;
+  }
+  console.log(`✅ Done! ${count} questions seeded.`);
+  return count;
+}
+
+// Standalone execution (npm run seed)
+const isMain = process.argv[1]?.includes('seed-questions');
+if (isMain) {
+  const db = new JsonlRepository();
+  await seed(db);
+
+  const allQuestions = db.all('questions');
+  const bySubject = {};
+  for (const q of allQuestions) {
+    bySubject[q.subject] = (bySubject[q.subject] || 0) + 1;
+  }
+
+  console.log('\n📊 Questions by subject:');
+  for (const [subject, count] of Object.entries(bySubject).sort()) {
+    console.log(`   ${subject}: ${count}`);
+  }
+}
