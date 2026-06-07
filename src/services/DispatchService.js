@@ -60,7 +60,10 @@ export class DispatchService {
       // No template configured — only works inside the 24h window (e.g. testing).
       console.warn(`WhatsApp daily template not set (WHATSAPP_DAILY_TEMPLATE) — attempting direct send to ${user.id}; will fail outside the 24h window.`);
       const questions = await this.questionService.generateDailySet(user);
-      if (questions.length) await this.whatsapp.sendQuestions(user.phone, questions, `📚 Daily Drill — ${questions.length} questions. Tap an option to answer!`);
+      if (questions.length) {
+        await this.whatsapp.sendText(user.phone, `📚 Daily Drill — ${questions.length} questions. Answer each to get the next!`);
+        await this.whatsapp.sendQuestion(user.phone, questions[0], 0, questions.length);
+      }
       return;
     }
 
@@ -77,31 +80,28 @@ export class DispatchService {
 
   async _dispatchTelegram(user, questions) {
     const total = questions.length;
-
     const subjectCount = user.subjects?.length || 1;
-    const perSubject = questions.length / Math.max(subjectCount, 1);
+    const perSubject = Math.round(questions.length / Math.max(subjectCount, 1));
 
     await this.telegram.send(user.telegram_id,
-      `🌅 *Good Morning!*\n📚 Your daily questions are here: ${Math.round(perSubject)} per subject across ${subjectCount} subject${subjectCount > 1 ? 's' : ''}. Good luck! 🚀`,
+      `🌅 *Good Morning!*\n📚 ${total} questions today (${perSubject} per subject across ${subjectCount} subject${subjectCount > 1 ? 's' : ''}). Answer each to get the next. Good luck! 🚀`,
       { parse_mode: 'Markdown' }
     );
 
-    for (let i = 0; i < questions.length; i++) {
-      const q = questions[i];
-      const formatted = this.questionService.formatQuestion(q, i, total);
-      const options = q.options || {};
-
-      await this.telegram.sendWithKeyboard(
-        user.telegram_id,
-        `*${formatted.header}*\n\n${formatted.body}`,
-        Object.entries(options).map(([key, val]) => ([{
-          text: `${key}) ${val.length > 40 ? val.slice(0, 37) + '...' : val}`,
-          callback_data: `answer:${q.id}:${key}:${i}:${total}`,
-        }]))
-      );
-
-      if (i < total - 1) await this._sleep(3000);
-    }
+    // Send-on-answer: only the first question goes out now; the rest follow as
+    // the student answers (TelegramBotAdapter._onAnswer). Keeps the 7am burst
+    // to one message per student.
+    const q = questions[0];
+    const formatted = this.questionService.formatQuestion(q, 0, total);
+    const options = q.options || {};
+    await this.telegram.sendWithKeyboard(
+      user.telegram_id,
+      `*${formatted.header}*\n\n${formatted.body}`,
+      Object.entries(options).map(([key, val]) => ([{
+        text: `${key}) ${val.length > 40 ? val.slice(0, 37) + '...' : val}`,
+        callback_data: `answer:${q.id}:${key}`,
+      }]))
+    );
   }
 
   async _notifyTrialExpired(user) {

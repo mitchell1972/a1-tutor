@@ -36,13 +36,16 @@ export async function buildContainer(env) {
     redirectUrl: env.FLUTTERWAVE_REDIRECT_URL,
   });
 
-  const telegramChannel = new TelegramChannel(env.TELEGRAM_BOT_TOKEN);
+  const telegramChannel = new TelegramChannel(env.TELEGRAM_BOT_TOKEN, {
+    ratePerSec: Number(env.TELEGRAM_RATE_PER_SEC) || 25,
+  });
 
   const whatsappChannel = new WhatsAppChannel({
     phoneNumberId: env.WHATSAPP_PHONE_NUMBER_ID,
     accessToken: env.WHATSAPP_ACCESS_TOKEN,
     verifyToken: env.WHATSAPP_VERIFY_TOKEN,
     appSecret: env.WHATSAPP_APP_SECRET,
+    ratePerSec: Number(env.WHATSAPP_RATE_PER_SEC) || 20,
   });
 
   // ─── Services ──────────────────────────────────────

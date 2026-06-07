@@ -1,12 +1,14 @@
 // src/infrastructure/messaging/TelegramChannel.js
 // Adapter: wraps node-telegram-bot-api. Only does I/O — no business logic.
 import TelegramBot from 'node-telegram-bot-api';
+import { RateLimiter } from '../RateLimiter.js';
 
 export class TelegramChannel {
-  constructor(token) {
+  constructor(token, { ratePerSec = 25 } = {}) {
     if (!token) throw new Error('TelegramChannel: token required');
     this.bot = new TelegramBot(token, { polling: true });
-    this._handlers = {};
+    // Global pacer so we never exceed Telegram's ~30 msg/sec per-bot limit.
+    this.limiter = new RateLimiter(ratePerSec);
   }
 
   onText(pattern, handler) {
@@ -21,7 +23,7 @@ export class TelegramChannel {
 
   async send(chatId, text, opts = {}) {
     try {
-      return await this.bot.sendMessage(chatId, text, opts);
+      return await this.limiter.schedule(() => this.bot.sendMessage(chatId, text, opts));
     } catch (err) {
       if (err.response?.statusCode === 403) {
         console.warn(`TelegramChannel: user ${chatId} blocked the bot`);
@@ -53,14 +55,14 @@ export class TelegramChannel {
   async editMessage(chatId, messageId, text, keyboard) {
     const opts = { chat_id: chatId, message_id: messageId, parse_mode: 'Markdown' };
     if (keyboard) opts.reply_markup = { inline_keyboard: keyboard };
-    return this.bot.editMessageText(text, opts);
+    return this.limiter.schedule(() => this.bot.editMessageText(text, opts));
   }
 
   async editKeyboard(chatId, messageId, keyboard) {
-    return this.bot.editMessageReplyMarkup(
+    return this.limiter.schedule(() => this.bot.editMessageReplyMarkup(
       { inline_keyboard: keyboard },
       { chat_id: chatId, message_id: messageId }
-    );
+    ));
   }
 
   async answerCallback(queryId, text = '', showAlert = false) {
