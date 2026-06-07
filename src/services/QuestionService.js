@@ -16,7 +16,7 @@ export class QuestionService {
    * Returns 10 questions per subject, filtered by exam type.
    * Guarantees zero duplicate questions ever.
    */
-  generateDailySet(user) {
+  async generateDailySet(user) {
     const subjects = user.subjects || [];
     if (subjects.length === 0) throw new Error('No subjects selected');
 
@@ -24,8 +24,8 @@ export class QuestionService {
     const examType = user.exam_type || null;
 
     // Get ALL question IDs ever sent to this user — permanent exclusion
-    const allTimeIds = this.repo.getAllDispatchedIds(user.id);
-    const todayDispatched = this.repo.getTodayDispatches(user.id);
+    const allTimeIds = await this.repo.getAllDispatchedIds(user.id);
+    const todayDispatched = await this.repo.getTodayDispatches(user.id);
     const todayIds = todayDispatched.flatMap(d => d.question_ids || []);
 
     // Exclude all-time + today (belt and suspenders)
@@ -37,7 +37,7 @@ export class QuestionService {
 
     for (const { subject, count } of allocation) {
       // Fetch more than needed so difficulty mix has room to work
-      const pool = this.repo.getQuestionsBySubject(subject, count * 4, {
+      const pool = await this.repo.getQuestionsBySubject(subject, count * 4, {
         excludeIds: [...excludeIds, ...usedIds],
         exam: examType, // JAMB students get JAMB questions, SSCE get SSCE
       });
@@ -58,8 +58,8 @@ export class QuestionService {
     const interleaved = interleaveBySubject(dailySet, subjects);
 
     // Mark questions as used
-    for (const q of interleaved) this.repo.markQuestionUsed(q.id);
-    this.repo.logDispatch(user.id, interleaved.map(q => q.id));
+    for (const q of interleaved) await this.repo.markQuestionUsed(q.id);
+    await this.repo.logDispatch(user.id, interleaved.map(q => q.id));
 
     return interleaved;
   }
@@ -67,27 +67,27 @@ export class QuestionService {
   /**
    * Check if user has already been dispatched questions today.
    */
-  isAlreadyDispatchedToday(userId) {
-    return this.repo.getTodayDispatches(userId).length > 0;
+  async isAlreadyDispatchedToday(userId) {
+    return (await this.repo.getTodayDispatches(userId)).length > 0;
   }
 
   /**
    * Get the total count of questions dispatched today for a user.
    */
-  getTotalDispatchedToday(userId) {
-    const dispatches = this.repo.getTodayDispatches(userId);
+  async getTotalDispatchedToday(userId) {
+    const dispatches = await this.repo.getTodayDispatches(userId);
     return dispatches.reduce((sum, d) => sum + (d.question_ids?.length || 0), 0);
   }
 
   // ─── Answer Processing ─────────────────────────────
 
-  processAnswer(userId, questionId, chosenAnswer) {
-    const question = this.repo.getQuestion(questionId);
+  async processAnswer(userId, questionId, chosenAnswer) {
+    const question = await this.repo.getQuestion(questionId);
     if (!question) return { error: 'question_not_found' };
 
     const correct = chosenAnswer.toUpperCase() === question.answer.toUpperCase();
 
-    this.repo.recordResponse({
+    await this.repo.recordResponse({
       user_id: userId,
       question_id: questionId,
       chosen_answer: chosenAnswer,
@@ -126,14 +126,17 @@ export class QuestionService {
     return msg;
   }
 
-  formatDailyReport(userId, responses) {
+  async formatDailyReport(userId, responses) {
     const total = responses.length;
     const correct = responses.filter(r => r.correct).length;
     const score = total ? Math.round((correct / total) * 100) : 0;
 
-    const answerDates = this.repo.getAllUserResponseDates(userId);
+    const answerDates = await this.repo.getAllUserResponseDates(userId);
     const streak = calculateStreak(answerDates);
-    const weakAreas = identifyWeakAreas(responses, (id) => this.repo.getQuestion(id));
+    // Batch-fetch the questions these responses touched, then pass a sync lookup
+    // to the (synchronous) domain function — one query instead of N.
+    const qMap = await this._questionMap(responses);
+    const weakAreas = identifyWeakAreas(responses, (id) => qMap.get(id));
 
     let report = `🏁 *Daily Report*\n━━━━━━━━━━━━━━━\n`;
     report += `📊 Score: ${correct}/${total} (${score}%)\n`;
@@ -153,12 +156,12 @@ export class QuestionService {
     return report;
   }
 
-  getCumulativeProgress(userId, totalDispatchedToday) {
+  async getCumulativeProgress(userId, totalDispatchedToday) {
     const today = new Date().toISOString().split('T')[0];
     const start = new Date(today);
     start.setHours(0, 0, 0, 0);
 
-    const todayResponses = this.repo.getResponses(userId, {
+    const todayResponses = await this.repo.getResponses(userId, {
       since: start.toISOString(),
     });
 
@@ -168,6 +171,13 @@ export class QuestionService {
       total: totalDispatchedToday,
       isComplete: todayResponses.length >= totalDispatchedToday,
     };
+  }
+
+  // Batch-fetch the questions referenced by a set of responses into a Map.
+  async _questionMap(responses) {
+    const ids = [...new Set(responses.map(r => r.question_id))];
+    const questions = await this.repo.getQuestionsByIds(ids);
+    return new Map(questions.map(q => [q.id, q]));
   }
 }
 

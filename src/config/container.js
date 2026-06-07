@@ -2,6 +2,7 @@
 // Dependency Injection container — the composition root.
 // Wires all layers together. No circular dependencies.
 import { JsonlRepository } from '../infrastructure/repositories/JsonlRepository.js';
+import { PgRepository } from '../infrastructure/repositories/PgRepository.js';
 import { FlutterwaveGateway } from '../infrastructure/payment/FlutterwaveGateway.js';
 import { TelegramChannel } from '../infrastructure/messaging/TelegramChannel.js';
 import { WhatsAppChannel } from '../infrastructure/messaging/WhatsAppChannel.js';
@@ -21,7 +22,12 @@ import { HttpServer } from '../presentation/HttpServer.js';
 export async function buildContainer(env) {
   // ─── Infrastructure ────────────────────────────────
 
-  const repo = new JsonlRepository();
+  // Postgres in production (DATABASE_URL set); JSONL files for local/dev fallback.
+  const repo = env.DATABASE_URL
+    ? new PgRepository(env.DATABASE_URL)
+    : new JsonlRepository();
+  if (typeof repo.init === 'function') await repo.init();
+  console.log(`🗄️  Repository: ${env.DATABASE_URL ? 'Postgres' : 'JSONL files'}`);
 
   const flutterwave = new FlutterwaveGateway({
     secretKey: env.FLUTTERWAVE_SECRET_KEY,

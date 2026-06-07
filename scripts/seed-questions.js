@@ -665,7 +665,7 @@ const QUESTIONS = [
 export async function seed(repo) {
   let count = 0;
   for (const q of QUESTIONS) {
-    repo.addQuestion(q);
+    await repo.addQuestion(q);
     count++;
   }
   console.log(`✅ Done! ${count} questions seeded.`);

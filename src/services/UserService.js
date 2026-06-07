@@ -11,8 +11,8 @@ export class UserService {
 
   // ─── Registration ──────────────────────────────────
 
-  startRegistration(telegramId) {
-    const existing = this.repo.getUserByTelegram(telegramId);
+  async startRegistration(telegramId) {
+    const existing = await this.repo.getUserByTelegram(telegramId);
     if (existing) return { isReturning: true, user: existing };
 
     return {
@@ -22,7 +22,7 @@ export class UserService {
     };
   }
 
-  registerUser({ telegramId, phone, examType, subjects, deliveryHour, deliveryMinute, channel }) {
+  async registerUser({ telegramId, phone, examType, subjects, deliveryHour, deliveryMinute, channel }) {
     // Validate
     if (!EXAM_TYPES[examType?.toUpperCase()]) throw new Error(`Invalid exam type: ${examType}`);
     if (!subjects || subjects.length < 2) throw new Error('Minimum 2 subjects required');
@@ -48,23 +48,23 @@ export class UserService {
     if (telegramId) data.telegram_id = telegramId;
     if (phone) data.phone = normalizePhone(phone);
 
-    return this.repo.createUser(data);
+    return await this.repo.createUser(data);
   }
 
   // ─── Access ────────────────────────────────────────
 
-  checkUserAccess(userId) {
-    const user = this.repo.getUser(userId);
+  async checkUserAccess(userId) {
+    const user = await this.repo.getUser(userId);
     if (!user) return { valid: false, reason: 'not_found' };
 
-    const activeSub = this.repo.getActiveSubscription(userId);
+    const activeSub = await this.repo.getActiveSubscription(userId);
     return checkAccess(user, activeSub);
   }
 
   // ─── Profile ───────────────────────────────────────
 
-  getProfile(userId) {
-    const user = this.repo.getUser(userId);
+  async getProfile(userId) {
+    const user = await this.repo.getUser(userId);
     if (!user) return null;
 
     return {

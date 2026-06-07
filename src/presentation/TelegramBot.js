@@ -38,12 +38,12 @@ export class TelegramBotAdapter {
 
   async _handleStart(msg) {
     const chatId = msg.chat.id;
-    const result = this.userService.startRegistration(chatId);
+    const result = await this.userService.startRegistration(chatId);
 
     if (result.isReturning) {
       const user = result.user;
-      const profile = this.userService.getProfile(user.id);
-      const subStatus = this.subscriptionService.getStatus(user.id);
+      const profile = await this.userService.getProfile(user.id);
+      const subStatus = await this.subscriptionService.getStatus(user.id);
 
       const statusEmoji = subStatus.status === 'active' ? '🟢' :
         subStatus.status === 'trial' ? '🟡' : '🔴';
@@ -205,7 +205,7 @@ export class TelegramBotAdapter {
 
     // WhatsApp is now its own front door (students register there directly),
     // so the Telegram bot always registers Telegram delivery — no channel step.
-    const user = this.userService.registerUser({
+    const user = await this.userService.registerUser({
       telegramId: chatId,
       examType: session.exam_type,
       subjects: session.selectedSubjects,
@@ -240,7 +240,7 @@ export class TelegramBotAdapter {
   // ─── Menu ──────────────────────────────────────────
 
   async _onMenu(chatId, action) {
-    const user = this.userService.repo.getUserByTelegram(chatId);
+    const user = await this.userService.repo.getUserByTelegram(chatId);
     if (!user) return this.tg.send(chatId, 'Please /start first!');
 
     switch (action) {
@@ -256,7 +256,7 @@ export class TelegramBotAdapter {
   // ─── Drill ─────────────────────────────────────────
 
   async _startDrill(chatId, user) {
-    const access = this.subscriptionService.getStatus(user.id);
+    const access = await this.subscriptionService.getStatus(user.id);
     if (!access.valid) {
       return this.tg.sendWithKeyboard(chatId,
         '🔒 Access required. Subscribe to continue:',
@@ -264,7 +264,7 @@ export class TelegramBotAdapter {
       );
     }
 
-    if (this.questionService.isAlreadyDispatchedToday(user.id)) {
+    if (await this.questionService.isAlreadyDispatchedToday(user.id)) {
       return this.tg.sendWithKeyboard(chatId,
         '✅ You\'ve already completed today\'s drill!\nCome back tomorrow.',
         this._mainMenuKeyboard(user)
@@ -276,7 +276,7 @@ export class TelegramBotAdapter {
       { parse_mode: 'Markdown' }
     );
 
-    const questions = this.questionService.generateDailySet(user);
+    const questions = await this.questionService.generateDailySet(user);
     const total = questions.length;
 
     for (let i = 0; i < questions.length; i++) {
@@ -296,7 +296,7 @@ export class TelegramBotAdapter {
   }
 
   async _handleDrillCmd(msg) {
-    const user = this.userService.repo.getUserByTelegram(msg.chat.id);
+    const user = await this.userService.repo.getUserByTelegram(msg.chat.id);
     if (!user) return this.tg.send(msg.chat.id, 'Please /start first!');
     return this._startDrill(msg.chat.id, user);
   }
@@ -310,14 +310,14 @@ export class TelegramBotAdapter {
     const questionIndex = parseInt(parts[3]);
     const total = parseInt(parts[4]);
 
-    const user = this.userService.repo.getUserByTelegram(chatId);
+    const user = await this.userService.repo.getUserByTelegram(chatId);
     if (!user) return;
-    const result = this.questionService.processAnswer(user.id, questionId, chosenAnswer);
+    const result = await this.questionService.processAnswer(user.id, questionId, chosenAnswer);
     if (result.error) return;
 
     const feedback = this.questionService.formatFeedback(result);
 
-    const progress = this.questionService.getCumulativeProgress(user.id, total);
+    const progress = await this.questionService.getCumulativeProgress(user.id, total);
 
     await this.tg.send(chatId,
       `${feedback}\n\n📊 So far: ${progress.correct}/${progress.answered} correct`,
@@ -328,8 +328,8 @@ export class TelegramBotAdapter {
       await this.tg.sleep(1000);
 
       const today = new Date().toISOString().split('T')[0];
-      const todayResponses = this.userService.repo.getResponsesByDate(user.id, today);
-      const report = this.questionService.formatDailyReport(user.id, todayResponses);
+      const todayResponses = await this.userService.repo.getResponsesByDate(user.id, today);
+      const report = await this.questionService.formatDailyReport(user.id, todayResponses);
       await this.tg.send(chatId, report, { parse_mode: 'Markdown' });
     }
   }
@@ -337,7 +337,7 @@ export class TelegramBotAdapter {
   // ─── Stats ─────────────────────────────────────────
 
   async _showStats(chatId, user) {
-    const analytics = this.analyticsService.getUserAnalytics(user.id);
+    const analytics = await this.analyticsService.getUserAnalytics(user.id);
     if (!analytics) return;
 
     const weekSummary = analytics.trend.map(t =>
@@ -360,7 +360,7 @@ export class TelegramBotAdapter {
   }
 
   async _handleStatsCmd(msg) {
-    const user = this.userService.repo.getUserByTelegram(msg.chat.id);
+    const user = await this.userService.repo.getUserByTelegram(msg.chat.id);
     if (!user) return this.tg.send(msg.chat.id, 'Please /start first!');
     return this._showStats(msg.chat.id, user);
   }
@@ -368,18 +368,18 @@ export class TelegramBotAdapter {
   // ─── Subscription ──────────────────────────────────
 
   async _showSubscription(chatId, user) {
-    const info = this.subscriptionService.getDisplayInfo(user.id);
+    const info = await this.subscriptionService.getDisplayInfo(user.id);
     await this.tg.sendWithKeyboard(chatId, info.text, this._plansKeyboard(user.id));
   }
 
   async _handleSubscribeCmd(msg) {
-    const user = this.userService.repo.getUserByTelegram(msg.chat.id);
+    const user = await this.userService.repo.getUserByTelegram(msg.chat.id);
     if (!user) return this.tg.send(msg.chat.id, 'Please /start first!');
     return this._showSubscription(msg.chat.id, user);
   }
 
   async _onPlan(chatId, planId) {
-    const user = this.userService.repo.getUserByTelegram(chatId);
+    const user = await this.userService.repo.getUserByTelegram(chatId);
     if (!user) return;
 
     const planAmounts = { weekly: 500, monthly: 1500, termly: 4000, yearly: 12000 };
