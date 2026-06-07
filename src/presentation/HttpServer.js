@@ -4,11 +4,12 @@
 import express from 'express';
 
 export class HttpServer {
-  constructor({ paymentService, dispatchService, whatsapp, whatsappBot, repo }) {
+  constructor({ paymentService, dispatchService, whatsapp, whatsappBot, telegram, repo }) {
     this.paymentService = paymentService;
     this.dispatchService = dispatchService;
     this.whatsapp = whatsapp;
     this.whatsappBot = whatsappBot;
+    this.telegram = telegram;
     this.repo = repo;
     this.app = express();
     this._setupRoutes();
@@ -78,6 +79,25 @@ export class HttpServer {
         console.error('WhatsApp webhook error:', err);
         // Respond 200 so Meta doesn't retry-storm on a logic/parse error.
         res.status(200).json({ status: 'error' });
+      }
+    });
+
+    // ─── Telegram (webhook mode) ──────────────────────
+
+    this.app.post('/webhook/telegram', (req, res) => {
+      try {
+        if (this.telegram?.webhookSecret) {
+          const got = req.headers['x-telegram-bot-api-secret-token'];
+          if (got !== this.telegram.webhookSecret) {
+            console.warn('Invalid Telegram webhook secret — rejecting');
+            return res.status(401).json({ error: 'invalid secret' });
+          }
+        }
+        this.telegram.processUpdate(req.body);
+        res.sendStatus(200);
+      } catch (err) {
+        console.error('Telegram webhook error:', err);
+        res.sendStatus(200); // ack so Telegram doesn't retry-storm
       }
     });
 

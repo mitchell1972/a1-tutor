@@ -4,11 +4,34 @@ import TelegramBot from 'node-telegram-bot-api';
 import { RateLimiter } from '../RateLimiter.js';
 
 export class TelegramChannel {
-  constructor(token, { ratePerSec = 25 } = {}) {
+  constructor(token, { ratePerSec = 25, webhookUrl = null, webhookSecret = null } = {}) {
     if (!token) throw new Error('TelegramChannel: token required');
-    this.bot = new TelegramBot(token, { polling: true });
+    this.webhookUrl = webhookUrl;
+    this.webhookSecret = webhookSecret;
+    // Webhook mode (production) lets us run multiple instances; polling is the
+    // local-dev default (only one process may poll a given token at a time).
+    this.bot = new TelegramBot(token, webhookUrl ? { polling: false } : { polling: true });
     // Global pacer so we never exceed Telegram's ~30 msg/sec per-bot limit.
     this.limiter = new RateLimiter(ratePerSec);
+  }
+
+  mode() {
+    return this.webhookUrl ? 'webhook' : 'polling';
+  }
+
+  async setupWebhook() {
+    if (!this.webhookUrl) return;
+    try {
+      const opts = this.webhookSecret ? { secret_token: this.webhookSecret } : {};
+      await this.bot.setWebHook(this.webhookUrl, opts);
+    } catch (err) {
+      console.error('TelegramChannel: setWebHook failed (check token/URL):', err.message);
+    }
+  }
+
+  // Feed an inbound update (from the webhook route) to the bot's handlers.
+  processUpdate(update) {
+    this.bot.processUpdate(update);
   }
 
   onText(pattern, handler) {

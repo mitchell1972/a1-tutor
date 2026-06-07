@@ -40,15 +40,13 @@ export class WhatsAppBotAdapter {
     this.paymentService = paymentService;
     this.analyticsService = analyticsService;
 
-    // In-memory registration sessions, keyed by normalised phone.
-    // (Lost on restart — registration is short, same trade-off as the Telegram bot.)
-    this._sessions = new Map();
   }
 
-  _session(phone) {
-    if (!this._sessions.has(phone)) this._sessions.set(phone, {});
-    return this._sessions.get(phone);
-  }
+  // Registration state lives in the repository, so it survives restarts and is
+  // shared across multiple instances (keyed by normalised phone).
+  _getSession(phone) { return this.repo.getSession('wa:' + phone); }
+  _setSession(phone, data) { return this.repo.setSession('wa:' + phone, data); }
+  _clearSession(phone) { return this.repo.deleteSession('wa:' + phone); }
 
   // ─── Inbound router ────────────────────────────────
 
@@ -103,7 +101,7 @@ export class WhatsAppBotAdapter {
   // ─── Registration ──────────────────────────────────
 
   async _startRegistration(phone) {
-    this._sessions.set(phone, { step: 'exam' });
+    await this._setSession(phone, { step: 'exam' });
     await this.channel.sendList(
       phone,
       'Welcome to ExamPrep! 🎓 I send you exam questions to drill every day — JAMB, WAEC, NECO, Post-UTME, GST and more.\n\nLet\'s set you up in under a minute. What are you preparing for?',
@@ -116,9 +114,10 @@ export class WhatsAppBotAdapter {
   async _onExam(phone, examType) {
     if (!examType || !EXAM_TYPES[examType.toUpperCase()]) return this._startRegistration(phone);
 
-    const session = this._session(phone);
+    const session = await this._getSession(phone);
     session.exam_type = examType;
     session.step = 'preset';
+    await this._setSession(phone, session);
 
     const isUniversity = ['post_utme', 'gst', 'squad'].includes(examType);
     const rows = Object.entries(SUBJECT_PRESETS)
@@ -139,12 +138,13 @@ export class WhatsAppBotAdapter {
   }
 
   async _onPreset(phone, presetKey) {
-    const session = this._session(phone);
+    const session = await this._getSession(phone);
     const preset = SUBJECT_PRESETS[presetKey];
     if (!session.exam_type || !preset) return this._startRegistration(phone);
 
     session.subjects = [...new Set(preset.subjects)];
     session.step = 'time';
+    await this._setSession(phone, session);
 
     const names = session.subjects.map(s => SUBJECTS[s]?.name || s).join(', ');
     await this.channel.sendList(
@@ -157,7 +157,7 @@ export class WhatsAppBotAdapter {
   }
 
   async _onTime(phone, hour, minute) {
-    const session = this._session(phone);
+    const session = await this._getSession(phone);
     if (!session.exam_type || !session.subjects) return this._startRegistration(phone);
 
     let user;
@@ -176,7 +176,7 @@ export class WhatsAppBotAdapter {
       return;
     }
 
-    this._sessions.delete(phone);
+    await this._clearSession(phone);
 
     const subjectNames = user.subjects.map(s => SUBJECTS[s]?.name || s).join(', ');
     const timeStr = `${String(user.delivery_hour).padStart(2, '0')}:${String(user.delivery_minute).padStart(2, '0')} WAT`;
