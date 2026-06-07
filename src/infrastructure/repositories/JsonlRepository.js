@@ -14,6 +14,7 @@ fs.mkdirSync(DATA_DIR, { recursive: true });
 export class JsonlRepository {
   constructor() {
     this._cache = new Map();
+    this._sessionStore = new Map(); // registration state (single-process)
   }
 
   // ─── file I/O ─────────────────────────────────────
@@ -221,6 +222,20 @@ export class JsonlRepository {
   getAllDispatchedIds(userId) {
     const dispatches = this._read('dispatches').filter(d => d.user_id === userId);
     return dispatches.flatMap(d => d.question_ids || []);
+  }
+
+  // ─── Sessions (in-memory; single-process fallback) ──
+
+  getSession(key) {
+    return this._sessionStore.get(key) || {};
+  }
+
+  setSession(key, data) {
+    this._sessionStore.set(key, data || {});
+  }
+
+  deleteSession(key) {
+    this._sessionStore.delete(key);
   }
 }
 

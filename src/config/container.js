@@ -36,8 +36,13 @@ export async function buildContainer(env) {
     redirectUrl: env.FLUTTERWAVE_REDIRECT_URL,
   });
 
+  // Webhook mode when a public URL is available (production); polling locally.
+  const webhookBase = env.WEBHOOK_BASE_URL
+    || (env.RAILWAY_PUBLIC_DOMAIN ? `https://${env.RAILWAY_PUBLIC_DOMAIN}` : null);
   const telegramChannel = new TelegramChannel(env.TELEGRAM_BOT_TOKEN, {
     ratePerSec: Number(env.TELEGRAM_RATE_PER_SEC) || 25,
+    webhookUrl: webhookBase ? `${webhookBase.replace(/\/+$/, '')}/webhook/telegram` : null,
+    webhookSecret: env.TELEGRAM_WEBHOOK_SECRET || null,
   });
 
   const whatsappChannel = new WhatsAppChannel({
@@ -99,6 +104,7 @@ export async function buildContainer(env) {
     dispatchService,
     whatsapp: whatsappChannel,
     whatsappBot,
+    telegram: telegramChannel,
     repo,
   });
 

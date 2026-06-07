@@ -56,6 +56,12 @@ CREATE TABLE IF NOT EXISTS dispatches (
   user_id text, question_ids jsonb DEFAULT '[]'::jsonb, dispatched_at timestamptz DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_dispatches_user_time ON dispatches(user_id, dispatched_at);
+
+CREATE TABLE IF NOT EXISTS sessions (
+  key text PRIMARY KEY,
+  data jsonb DEFAULT '{}'::jsonb,
+  updated_at timestamptz DEFAULT now()
+);
 `;
 
 const TABLES = new Set(['users', 'questions', 'responses', 'subscriptions', 'dispatches']);
@@ -308,5 +314,24 @@ export class PgRepository {
       'SELECT question_ids FROM dispatches WHERE user_id = $1', [userId]
     );
     return rows.flatMap(d => d.question_ids || []);
+  }
+
+  // ─── Sessions (registration state, shared across instances) ──
+
+  async getSession(key) {
+    const { rows } = await this.pool.query('SELECT data FROM sessions WHERE key = $1', [key]);
+    return rows[0]?.data || {};
+  }
+
+  async setSession(key, data) {
+    await this.pool.query(
+      `INSERT INTO sessions (key, data, updated_at) VALUES ($1, $2::jsonb, now())
+       ON CONFLICT (key) DO UPDATE SET data = $2::jsonb, updated_at = now()`,
+      [key, JSON.stringify(data || {})]
+    );
+  }
+
+  async deleteSession(key) {
+    await this.pool.query('DELETE FROM sessions WHERE key = $1', [key]);
   }
 }

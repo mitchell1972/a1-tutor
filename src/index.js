@@ -39,8 +39,13 @@ async function main() {
   // 4. Start daily dispatch scheduler
   container.scheduler.start();
 
-  // 5. Telegram bot is already polling (started by TelegramChannel constructor)
-  console.log('🤖 Telegram bot polling');
+  // 5. Telegram: register the webhook (production) or rely on polling (local dev).
+  if (container.telegramChannel.mode() === 'webhook') {
+    await container.telegramChannel.setupWebhook();
+    console.log('🤖 Telegram bot: webhook mode');
+  } else {
+    console.log('🤖 Telegram bot: polling mode');
+  }
 
   console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
   console.log('✅ ExamPrep Agent is live!');

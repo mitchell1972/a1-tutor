@@ -13,16 +13,14 @@ export class TelegramBotAdapter {
     this.dispatchService = dispatchService;
     this.analyticsService = analyticsService;
 
-    // In-memory registration sessions
-    this._sessions = new Map();
-
     this._registerHandlers();
   }
 
-  _session(chatId) {
-    if (!this._sessions.has(chatId)) this._sessions.set(chatId, {});
-    return this._sessions.get(chatId);
-  }
+  // Registration state lives in the repository, so it survives restarts and is
+  // shared across instances (keyed by Telegram chat id).
+  _getSession(chatId) { return this.userService.repo.getSession('tg:' + chatId); }
+  _setSession(chatId, data) { return this.userService.repo.setSession('tg:' + chatId, data); }
+  _clearSession(chatId) { return this.userService.repo.deleteSession('tg:' + chatId); }
 
   // ─── Handler Registration ──────────────────────────
 
@@ -67,9 +65,7 @@ export class TelegramBotAdapter {
     }
 
     // New user
-    const session = this._session(chatId);
-    session.step = 'exam_type';
-    session.telegramId = chatId;
+    await this._setSession(chatId, { step: 'exam_type', telegramId: chatId });
 
     await this.tg.sendWithKeyboard(chatId,
       `🎓 *Welcome to ExamPrep Bot!*\n\n` +
@@ -92,16 +88,15 @@ export class TelegramBotAdapter {
     const chatId = query.message.chat.id;
     const data = query.data;
     const queryId = query.id;
-    const session = this._session(chatId);
 
     try {
       await this.tg.answerCallback(queryId);
 
-      if (data.startsWith('exam:'))     await this._onExam(chatId, session, data.split(':')[1], query.message.message_id);
-      else if (data.startsWith('preset:')) await this._onPreset(chatId, session, data.split(':')[1], query.message.message_id);
-      else if (data.startsWith('subject:')) await this._onSubjectToggle(chatId, session, data.split(':')[1], query.message.message_id, queryId);
-      else if (data === 'subjects:done') await this._onSubjectsDone(chatId, session, query.message.message_id, queryId);
-      else if (data.startsWith('time:'))  await this._onTime(chatId, session, data.split(':').slice(1), query.message.message_id);
+      if (data.startsWith('exam:'))     await this._onExam(chatId, data.split(':')[1], query.message.message_id);
+      else if (data.startsWith('preset:')) await this._onPreset(chatId, data.split(':')[1], query.message.message_id);
+      else if (data.startsWith('subject:')) await this._onSubjectToggle(chatId, data.split(':')[1], query.message.message_id, queryId);
+      else if (data === 'subjects:done') await this._onSubjectsDone(chatId, query.message.message_id, queryId);
+      else if (data.startsWith('time:'))  await this._onTime(chatId, data.split(':').slice(1), query.message.message_id);
       else if (data.startsWith('menu:'))  await this._onMenu(chatId, data.split(':')[1]);
       else if (data.startsWith('plan:'))  await this._onPlan(chatId, data.split(':')[1]);
       else if (data.startsWith('answer:')) await this._onAnswer(chatId, data, query.message.message_id);
@@ -114,7 +109,8 @@ export class TelegramBotAdapter {
 
   // ─── Registration Steps ────────────────────────────
 
-  async _onExam(chatId, session, examType, msgId) {
+  async _onExam(chatId, examType, msgId) {
+    const session = await this._getSession(chatId);
     session.exam_type = examType;
     session.step = 'subjects';
 
@@ -142,6 +138,7 @@ export class TelegramBotAdapter {
       ? `${SUBJECTS[compulsory]?.icon || ''} ${SUBJECTS[compulsory]?.name || compulsory} is automatically included.\n`
       : '';
 
+    await this._setSession(chatId, session);
     await this.tg.editMessage(chatId, msgId,
       `*Choose your subject combination:*\n\n` +
       `${compulsoryMsg}Pick your subjects (${compulsory ? '3-4' : '4-6'} recommended).`,
@@ -149,11 +146,13 @@ export class TelegramBotAdapter {
     );
   }
 
-  async _onPreset(chatId, session, preset, msgId) {
+  async _onPreset(chatId, preset, msgId) {
+    const session = await this._getSession(chatId);
     if (preset !== 'custom') {
       const presetSubjects = SUBJECT_PRESETS[preset]?.subjects || [];
       session.selectedSubjects = [...new Set(presetSubjects)];
       session.step = 'delivery_time';
+      await this._setSession(chatId, session);
 
       const names = session.selectedSubjects.map(s => `${SUBJECTS[s]?.icon} ${SUBJECTS[s]?.name}`).join('\n');
       await this.tg.editMessage(chatId, msgId,
@@ -164,14 +163,17 @@ export class TelegramBotAdapter {
     }
 
     session.selectedSubjects = ['english'];
+    await this._setSession(chatId, session);
     await this.tg.editMessage(chatId, msgId,
       `*Select your subjects:*\n\nTap to toggle. English is compulsory. Choose 3-4 total.`,
       this._subjectKeyboard(session.selectedSubjects)
     );
   }
 
-  async _onSubjectToggle(chatId, session, subjectId, msgId, queryId) {
+  async _onSubjectToggle(chatId, subjectId, msgId, queryId) {
     if (subjectId === 'english') return;
+    const session = await this._getSession(chatId);
+    if (!session.selectedSubjects) session.selectedSubjects = ['english'];
 
     if (session.selectedSubjects.includes(subjectId)) {
       session.selectedSubjects = session.selectedSubjects.filter(s => s !== subjectId);
@@ -182,15 +184,18 @@ export class TelegramBotAdapter {
       session.selectedSubjects.push(subjectId);
     }
 
+    await this._setSession(chatId, session);
     await this.tg.editKeyboard(chatId, msgId, this._subjectKeyboard(session.selectedSubjects));
   }
 
-  async _onSubjectsDone(chatId, session, msgId, queryId) {
-    if (session.selectedSubjects.length < 2) {
+  async _onSubjectsDone(chatId, msgId, queryId) {
+    const session = await this._getSession(chatId);
+    if (!session.selectedSubjects || session.selectedSubjects.length < 2) {
       return this.tg.answerCallback(queryId, 'Select at least 2 subjects!', true);
     }
 
     session.step = 'delivery_time';
+    await this._setSession(chatId, session);
     const names = session.selectedSubjects.map(s => `${SUBJECTS[s]?.icon} ${SUBJECTS[s]?.name}`).join('\n');
     await this.tg.editMessage(chatId, msgId,
       `*Your subjects:*\n${names}\n\n*When should I send your daily questions?* (West Africa Time)`,
@@ -198,7 +203,8 @@ export class TelegramBotAdapter {
     );
   }
 
-  async _onTime(chatId, session, timeParts, msgId) {
+  async _onTime(chatId, timeParts, msgId) {
+    const session = await this._getSession(chatId);
     const [hour, minute] = timeParts.map(Number);
     session.delivery_hour = hour;
     session.delivery_minute = minute;
@@ -214,7 +220,7 @@ export class TelegramBotAdapter {
       channel: 'telegram',
     });
 
-    this._sessions.delete(chatId);
+    await this._clearSession(chatId);
 
     const subjectNames = user.subjects.map(s => `${SUBJECTS[s]?.icon} ${SUBJECTS[s]?.name}`).join(', ');
     const timeStr = `${String(user.delivery_hour).padStart(2, '0')}:${String(user.delivery_minute).padStart(2, '0')} WAT`;
