@@ -79,6 +79,29 @@ export class QuestionService {
     return dispatches.reduce((sum, d) => sum + (d.question_ids?.length || 0), 0);
   }
 
+  /**
+   * Ordered list of question IDs dispatched to the user today. Drives
+   * send-on-answer: question N+1 is sent only after question N is answered.
+   */
+  async getTodayQuestionIds(userId) {
+    const dispatches = await this.repo.getTodayDispatches(userId);
+    return dispatches.flatMap(d => d.question_ids || []);
+  }
+
+  /**
+   * Given the question just answered, return the next one to send (or null if
+   * that was the last). Looks up the day's order from the dispatch log.
+   */
+  async getNextQuestion(userId, answeredQuestionId) {
+    const orderedIds = await this.getTodayQuestionIds(userId);
+    const idx = orderedIds.indexOf(answeredQuestionId);
+    if (idx === -1 || idx + 1 >= orderedIds.length) {
+      return { question: null, index: idx, total: orderedIds.length };
+    }
+    const question = await this.repo.getQuestion(orderedIds[idx + 1]);
+    return { question, index: idx + 1, total: orderedIds.length };
+  }
+
   // ─── Answer Processing ─────────────────────────────
 
   async processAnswer(userId, questionId, chosenAnswer) {

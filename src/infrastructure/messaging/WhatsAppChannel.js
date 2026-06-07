@@ -2,15 +2,17 @@
 // Adapter: Meta WhatsApp Cloud API. Only does I/O — no business logic.
 import axios from 'axios';
 import crypto from 'node:crypto';
+import { RateLimiter } from '../RateLimiter.js';
 
 export class WhatsAppChannel {
-  constructor({ phoneNumberId, accessToken, verifyToken, appSecret }) {
+  constructor({ phoneNumberId, accessToken, verifyToken, appSecret, ratePerSec = 20 }) {
     this.phoneNumberId = phoneNumberId;
     this.accessToken = accessToken;
     this.verifyToken = verifyToken;
     this.appSecret = appSecret; // used to verify inbound webhook signatures
     this.baseUrl = `https://graph.facebook.com/v21.0/${phoneNumberId}`;
     this._warnedNoSecret = false;
+    this.limiter = new RateLimiter(ratePerSec);
 
     this.client = axios.create({
       baseURL: this.baseUrl,
@@ -25,7 +27,7 @@ export class WhatsAppChannel {
 
   async _post(payload, label) {
     try {
-      const { data } = await this.client.post('/messages', payload);
+      const { data } = await this.limiter.schedule(() => this.client.post('/messages', payload));
       return { ok: true, id: data.messages?.[0]?.id };
     } catch (err) {
       console.error(`WhatsApp ${label} failed:`, err.response?.data || err.message);

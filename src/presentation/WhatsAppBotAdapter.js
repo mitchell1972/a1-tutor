@@ -245,11 +245,9 @@ export class WhatsAppBotAdapter {
       return this.channel.sendText(phone, '⚠️ No questions available right now. Try again later.');
     }
 
-    await this.channel.sendQuestions(
-      phone,
-      questions,
-      `📚 Daily Drill — ${questions.length} questions. Tap an option to answer. Let's go! 🚀`
-    );
+    // Send-on-answer: first question only; the rest follow as answers come in.
+    await this.channel.sendText(phone, `📚 Daily Drill — ${questions.length} questions. Answer each to get the next. Let's go! 🚀`);
+    await this.channel.sendQuestion(phone, questions[0], 0, questions.length);
   }
 
   // ─── Answer ────────────────────────────────────────
@@ -263,12 +261,14 @@ export class WhatsAppBotAdapter {
     if (result.error) return;
 
     const feedback = this.questionService.formatFeedback(result);
-    const total = await this.questionService.getTotalDispatchedToday(user.id);
+    const { question: next, index, total } = await this.questionService.getNextQuestion(user.id, questionId);
     const progress = await this.questionService.getCumulativeProgress(user.id, total);
 
     await this.channel.sendText(phone, `${feedback}\n\n📊 So far: ${progress.correct}/${progress.answered} correct`);
 
-    if (progress.isComplete) {
+    if (next) {
+      await this.channel.sendQuestion(phone, next, index, total);
+    } else {
       const today = new Date().toISOString().split('T')[0];
       const todayResponses = await this.repo.getResponsesByDate(user.id, today);
       const report = await this.questionService.formatDailyReport(user.id, todayResponses);

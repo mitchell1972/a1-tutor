@@ -104,7 +104,7 @@ export class TelegramBotAdapter {
       else if (data.startsWith('time:'))  await this._onTime(chatId, session, data.split(':').slice(1), query.message.message_id);
       else if (data.startsWith('menu:'))  await this._onMenu(chatId, data.split(':')[1]);
       else if (data.startsWith('plan:'))  await this._onPlan(chatId, data.split(':')[1]);
-      else if (data.startsWith('answer:')) await this._onAnswer(chatId, data);
+      else if (data.startsWith('answer:')) await this._onAnswer(chatId, data, query.message.message_id);
 
     } catch (err) {
       console.error('Callback error:', err);
@@ -271,28 +271,34 @@ export class TelegramBotAdapter {
       );
     }
 
+    const questions = await this.questionService.generateDailySet(user);
+    if (!questions.length) {
+      return this.tg.sendWithKeyboard(chatId,
+        '⚠️ No questions available right now. Try again later.',
+        this._mainMenuKeyboard(user)
+      );
+    }
+
     await this.tg.send(chatId,
-      `📚 *Starting Your Drill*\n${QUESTIONS_PER_SUBJECT} questions per subject coming up. Good luck! 🚀`,
+      `📚 *Starting Your Drill*\n${questions.length} questions — answer each to get the next. Good luck! 🚀`,
       { parse_mode: 'Markdown' }
     );
 
-    const questions = await this.questionService.generateDailySet(user);
-    const total = questions.length;
+    // Send-on-answer: send only the first question; the rest follow as answers
+    // come in. This keeps the 7am burst to one message per student.
+    await this._sendQuestion(chatId, questions[0], 0, questions.length);
+  }
 
-    for (let i = 0; i < questions.length; i++) {
-      const formatted = this.questionService.formatQuestion(questions[i], i, total);
-      const opts = questions[i].options || {};
-
-      await this.tg.sendWithKeyboard(chatId,
-        `*${formatted.header}*\n\n${formatted.body}`,
-        Object.entries(opts).map(([k, v]) => ([{
-          text: `${k}) ${v.length > 40 ? v.slice(0, 37) + '...' : v}`,
-          callback_data: `answer:${questions[i].id}:${k}:${i}:${total}`,
-        }]))
-      );
-
-      if (i < total - 1) await this.tg.sleep(3000);
-    }
+  async _sendQuestion(chatId, question, index, total) {
+    const formatted = this.questionService.formatQuestion(question, index, total);
+    const opts = question.options || {};
+    await this.tg.sendWithKeyboard(chatId,
+      `*${formatted.header}*\n\n${formatted.body}`,
+      Object.entries(opts).map(([k, v]) => ([{
+        text: `${k}) ${v.length > 40 ? v.slice(0, 37) + '...' : v}`,
+        callback_data: `answer:${question.id}:${k}`,
+      }]))
+    );
   }
 
   async _handleDrillCmd(msg) {
@@ -303,20 +309,23 @@ export class TelegramBotAdapter {
 
   // ─── Answer ────────────────────────────────────────
 
-  async _onAnswer(chatId, data) {
+  async _onAnswer(chatId, data, messageId) {
     const parts = data.split(':');
     const questionId = parts[1];
     const chosenAnswer = parts[2];
-    const questionIndex = parseInt(parts[3]);
-    const total = parseInt(parts[4]);
 
     const user = await this.userService.repo.getUserByTelegram(chatId);
     if (!user) return;
     const result = await this.questionService.processAnswer(user.id, questionId, chosenAnswer);
     if (result.error) return;
 
-    const feedback = this.questionService.formatFeedback(result);
+    // Remove the answered question's buttons so it can't be tapped twice.
+    if (messageId) {
+      try { await this.tg.editKeyboard(chatId, messageId, []); } catch { /* message too old; ignore */ }
+    }
 
+    const feedback = this.questionService.formatFeedback(result);
+    const { question: next, index, total } = await this.questionService.getNextQuestion(user.id, questionId);
     const progress = await this.questionService.getCumulativeProgress(user.id, total);
 
     await this.tg.send(chatId,
@@ -324,9 +333,11 @@ export class TelegramBotAdapter {
       { parse_mode: 'Markdown' }
     );
 
-    if (progress.isComplete) {
-      await this.tg.sleep(1000);
-
+    if (next) {
+      await this.tg.sleep(400);
+      await this._sendQuestion(chatId, next, index, total);
+    } else {
+      await this.tg.sleep(600);
       const today = new Date().toISOString().split('T')[0];
       const todayResponses = await this.userService.repo.getResponsesByDate(user.id, today);
       const report = await this.questionService.formatDailyReport(user.id, todayResponses);
