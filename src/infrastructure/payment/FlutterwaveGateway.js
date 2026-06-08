@@ -56,11 +56,11 @@ export class FlutterwaveGateway {
   verifyWebhook(signature, payload) {
     if (!this.webhookSecret) return true; // skip verification if not configured
 
-    const hash = crypto.createHmac('sha256', this.webhookSecret)
-      .update(JSON.stringify(payload))
-      .digest('hex');
-
-    return hash === signature;
+    // Flutterwave V3 sends the configured secret hash *verbatim* in the `verif-hash`
+    // header — it is NOT an HMAC of the payload. Compare it directly, constant-time.
+    const got = Buffer.from(String(signature || ''));
+    const want = Buffer.from(this.webhookSecret);
+    return got.length === want.length && crypto.timingSafeEqual(got, want);
   }
 
   /**
