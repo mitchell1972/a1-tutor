@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS questions (
 );
 CREATE INDEX IF NOT EXISTS idx_questions_subject ON questions(subject, exam);
 CREATE INDEX IF NOT EXISTS idx_questions_times_used ON questions(times_used);
+ALTER TABLE questions ADD COLUMN IF NOT EXISTS source text;
 
 CREATE TABLE IF NOT EXISTS responses (
   id text PRIMARY KEY,
@@ -195,14 +196,15 @@ export class PgRepository {
     const id = question.id || genId('q');
     const { rows } = await this.pool.query(
       `INSERT INTO questions
-         (id, subject, exam, year, topic, difficulty, text, options, answer, explanation, times_used, last_used, created_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,0,NULL,now())
+         (id, subject, exam, year, topic, difficulty, text, options, answer, explanation, source, times_used, last_used, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11,0,NULL,now())
        ON CONFLICT (id) DO NOTHING
        RETURNING *`,
       [
         id, question.subject ?? null, question.exam ?? null, question.year ?? null,
         question.topic ?? null, question.difficulty ?? null, question.text ?? null,
         JSON.stringify(question.options ?? {}), question.answer ?? null, question.explanation ?? null,
+        question.source ?? null,
       ]
     );
     return rows[0];

@@ -8,6 +8,7 @@
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
     "seed": "node scripts/seed-questions.js",
+    "generate": "node scripts/generate-questions.js",
     "test": "node --test"
   },
   "dependencies": {

@@ -1,0 +1,349 @@
+// scripts/generate-questions.js
+// Syllabus-grounded, AI-generated, two-stage-validated question generator for the bank.
+//
+// Pipeline:  generate (DeepSeek) -> validate (independent DeepSeek pass) -> dedup -> seed Postgres
+//
+// Questions are generated OFFLINE and banked (generated once, reused by every student).
+// Only questions that PASS validation (answer key confirmed correct + on-syllabus) are inserted.
+//
+// Usage:
+//   DEEPSEEK_API_KEY=sk-... DATABASE_URL=postgres://...  \
+//     node scripts/generate-questions.js --exams jamb,ssce --subjects english,mathematics --per-topic 3
+//
+//   # Quality proof — generate + validate but DON'T write to the bank, print samples:
+//   node scripts/generate-questions.js --exams jamb,ssce --subjects english --per-topic 2 --dry-run
+//
+// Flags:
+//   --exams       comma list of exam ids (default: jamb,ssce). Valid: jamb, ssce, neco, post_utme, gst, squad, ican
+//   --subjects    comma list of subject ids (default: all SECONDARY subjects)
+//   --topics      comma list of topic ids to restrict to (default: all topics for the subject)
+//   --per-topic   questions to generate per (exam × subject × topic) before validation (default: 3)
+//   --dry-run     generate + validate, print samples, but do NOT insert into the bank
+//   --max         hard cap on total questions inserted this run (safety; default: unlimited)
+//
+// Env:
+//   DEEPSEEK_API_KEY (or AI_API_KEY)         — required (unless --help)
+//   DEEPSEEK_MODEL   (or AI_MODEL)           — default: deepseek-v4-flash
+//   DEEPSEEK_BASE_URL(or AI_BASE_URL)        — default: https://api.deepseek.com
+//   DATABASE_URL     (or DATABASE_PUBLIC_URL)— Postgres; if absent, falls back to local JsonlRepository
+
+import 'dotenv/config';
+import axios from 'axios';
+import { EXAM_TYPES, SUBJECTS, formatTopic } from '../src/config/subjects.js';
+import { PgRepository } from '../src/infrastructure/repositories/PgRepository.js';
+import { JsonlRepository } from '../src/infrastructure/repositories/JsonlRepository.js';
+
+// ─── Config ────────────────────────────────────────────────
+const API_KEY  = process.env.DEEPSEEK_API_KEY || process.env.AI_API_KEY;
+const BASE_URL = process.env.DEEPSEEK_BASE_URL || process.env.AI_BASE_URL || 'https://api.deepseek.com';
+const MODEL    = process.env.DEEPSEEK_MODEL    || process.env.AI_MODEL    || 'deepseek-v4-flash';
+
+// Secondary subjects (the ones that apply to JAMB / SSCE / NECO)
+const SECONDARY_SUBJECTS = [
+  'english', 'mathematics', 'physics', 'chemistry', 'biology',
+  'economics', 'government', 'literature', 'commerce', 'accounting',
+  'geography', 'crs', 'agric_science',
+];
+
+const DIFFICULTY_LABELS = { 1: 'easy', 2: 'medium', 3: 'hard' };
+
+// ─── Tiny arg parser ───────────────────────────────────────
+function parseArgs(argv) {
+  const out = { exams: 'jamb,ssce', subjects: '', topics: '', 'per-topic': '3', mode: 'syllabus', year: '', 'dry-run': false, max: '' };
+  for (let i = 2; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === '--dry-run') out['dry-run'] = true;
+    else if (a === '--help' || a === '-h') out.help = true;
+    else if (a.startsWith('--')) out[a.slice(2)] = argv[++i];
+  }
+  return out;
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Normalised text for de-duplication (case/space/punctuation-insensitive)
+export function normText(s) {
+  return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+// Robust JSON extraction — handles models that wrap output in ```json fences or prose.
+export function extractJson(content) {
+  if (!content) return null;
+  let s = content.trim();
+  const fence = s.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fence) s = fence[1].trim();
+  try { return JSON.parse(s); } catch { /* fall through */ }
+  const first = Math.min(...['{', '['].map((c) => { const i = s.indexOf(c); return i === -1 ? Infinity : i; }));
+  const lastObj = s.lastIndexOf('}'); const lastArr = s.lastIndexOf(']');
+  const last = Math.max(lastObj, lastArr);
+  if (first !== Infinity && last > first) {
+    try { return JSON.parse(s.slice(first, last + 1)); } catch { /* ignore */ }
+  }
+  return null;
+}
+
+// Normalise a raw generated question into a clean record, or null if unusable.
+// Tolerant of numeric options and answers returned as the option *value* instead of its letter
+// (common with maths), which the original strict check wrongly dropped as "malformed".
+export function normalizeQuestion(q) {
+  if (!q || typeof q.text !== 'string' || q.text.trim().length < 8) return null;
+  const o = q.options;
+  if (!o || typeof o !== 'object') return null;
+  const options = {};
+  for (const k of ['A', 'B', 'C', 'D']) {
+    if (o[k] === undefined || o[k] === null) return null;
+    options[k] = String(o[k]).trim();          // coerce numbers/expressions to string
+    if (!options[k]) return null;
+  }
+  if (new Set(['A', 'B', 'C', 'D'].map((k) => normText(options[k]))).size !== 4) return null; // distinct
+
+  let answer = String(q.answer ?? '').trim().toUpperCase();
+  if (!['A', 'B', 'C', 'D'].includes(answer)) {
+    // model returned the answer VALUE rather than its letter — map it back to the letter
+    const hit = ['A', 'B', 'C', 'D'].find((k) => normText(options[k]) === normText(q.answer));
+    if (!hit) return null;
+    answer = hit;
+  }
+  const difficulty = [1, 2, 3].includes(q.difficulty) ? q.difficulty : 2;
+  return { text: q.text.trim(), options, answer, difficulty, explanation: String(q.explanation || '').trim() };
+}
+
+// ─── DeepSeek client ───────────────────────────────────────
+const ai = axios.create({
+  baseURL: BASE_URL,
+  headers: { Authorization: `Bearer ${API_KEY}`, 'Content-Type': 'application/json' },
+  timeout: 180000,
+});
+
+async function chat(messages, { temperature = 0.7, retries = 3 } = {}) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      // NB: no forced response_format — v4-flash is a reasoning model and may not
+      // support JSON mode; the prompts demand JSON and extractJson() is tolerant.
+      const { data } = await ai.post('/chat/completions', {
+        model: MODEL,
+        messages,
+        temperature,
+      });
+      return data?.choices?.[0]?.message?.content ?? '';
+    } catch (err) {
+      const status = err.response?.status;
+      if (attempt > retries || (status && status >= 400 && status < 500 && status !== 429)) {
+        throw new Error(`DeepSeek error (${status || err.code}): ${err.response?.data?.error?.message || err.message}`);
+      }
+      await sleep(1500 * attempt); // back off on 429/5xx/network
+    }
+  }
+}
+
+// ─── Stage 1: generate ─────────────────────────────────────
+async function generateForTopic(examLabel, subjectName, topic, n) {
+  const topicLabel = formatTopic(topic);
+  const sys = `You are a senior Nigerian examiner who writes ${examLabel} multiple-choice questions for ${subjectName}. ` +
+    `Every question must: match the ${examLabel} syllabus and standard, be factually correct, have EXACTLY ONE correct option, ` +
+    `use four plausible options, be unambiguous, and use Nigerian context where natural. Avoid trick wording.`;
+  const user = `Generate ${n} ${examLabel} ${subjectName} multiple-choice questions on the topic "${topicLabel}". ` +
+    `Vary the difficulty (some easy, some medium, some hard). ` +
+    `Return ONLY a JSON object of this exact shape:\n` +
+    `{"questions":[{"text":"...","options":{"A":"...","B":"...","C":"...","D":"..."},"answer":"A","difficulty":1,"explanation":"why the answer is correct"}]}\n` +
+    `difficulty is 1 (easy), 2 (medium) or 3 (hard). No markdown, no commentary.`;
+
+  const content = await chat(
+    [{ role: 'system', content: sys }, { role: 'user', content: user }],
+    { temperature: 0.85 }
+  );
+  const parsed = extractJson(content);
+  const arr = Array.isArray(parsed) ? parsed : parsed?.questions;
+  return Array.isArray(arr) ? arr : [];
+}
+
+// ─── Stage 2: independent validation ───────────────────────
+// A SECOND model pass that re-derives the answer from scratch and checks syllabus fit.
+async function validateQuestion(examLabel, subjectName, q) {
+  const sys = `You are a meticulous ${examLabel} ${subjectName} fact-checker. You independently solve the question, ` +
+    `then judge it. Be strict: reject anything with a wrong/ambiguous answer key or off-syllabus content.`;
+  const user = `Question: ${q.text}\n` +
+    `A) ${q.options.A}\nB) ${q.options.B}\nC) ${q.options.C}\nD) ${q.options.D}\n` +
+    `The author marked the answer as: ${q.answer}\n\n` +
+    `Independently determine the correct option, then respond ONLY as JSON:\n` +
+    `{"correct_answer":"A|B|C|D","valid":true|false,"on_syllabus":true|false,"issue":"short reason if not valid"}\n` +
+    `Set valid=true ONLY if exactly one option is correct, it is on the ${examLabel} ${subjectName} syllabus, and it is unambiguous.`;
+
+  const content = await chat(
+    [{ role: 'system', content: sys }, { role: 'user', content: user }],
+    { temperature: 0 }
+  );
+  const v = extractJson(content) || {};
+  const ok = v.valid === true && v.on_syllabus !== false && v.correct_answer === q.answer;
+  return { ok, verifierAnswer: v.correct_answer, issue: v.issue || (v.correct_answer !== q.answer ? `verifier says ${v.correct_answer}` : 'unspecified') };
+}
+
+// ─── Prediction: weight generation toward historically-frequent topics ──
+async function topicFrequency(repo, exam, subjectId) {
+  let rows = [];
+  try { rows = await repo.getQuestionsBySubject(subjectId, 1_000_000, { exam }); } catch { /* fresh bank */ }
+  const freq = new Map();
+  for (const r of rows) {
+    if (!r.topic) continue;
+    const yr = Number(r.year) || 0;
+    const recency = yr ? Math.max(1, yr - 2018) : 1; // newer past papers weigh more
+    freq.set(r.topic, (freq.get(r.topic) || 0) + recency);
+  }
+  return freq;
+}
+
+// [{topic, n, score}] — hotter topics get more questions (1×…3× perTopic), hottest first.
+export function allocateByFrequency(topics, freq, perTopic) {
+  const max = Math.max(1, ...topics.map((t) => freq.get(t) || 0));
+  return topics
+    .map((t) => {
+      const score = freq.get(t) || 0;
+      return { topic: t, score, n: Math.max(1, Math.round(perTopic * (1 + 2 * (score / max)))) };
+    })
+    .sort((a, b) => b.n - a.n);
+}
+
+// ─── Main ──────────────────────────────────────────────────
+async function main() {
+  const args = parseArgs(process.argv);
+  if (args.help) { console.log(headerHelp()); return; }
+
+  const dryRun = !!args['dry-run'];
+  if (!API_KEY) {
+    console.error('❌ DEEPSEEK_API_KEY (or AI_API_KEY) is required.');
+    process.exit(1);
+  }
+
+  const exams = args.exams.split(',').map((s) => s.trim()).filter(Boolean);
+  for (const e of exams) {
+    if (!Object.values(EXAM_TYPES).some((t) => t.id === e)) {
+      console.error(`❌ Unknown exam id "${e}". Valid: ${Object.values(EXAM_TYPES).map((t) => t.id).join(', ')}`);
+      process.exit(1);
+    }
+  }
+  const subjectIds = (args.subjects ? args.subjects.split(',') : SECONDARY_SUBJECTS)
+    .map((s) => s.trim()).filter(Boolean);
+  for (const s of subjectIds) {
+    if (!SUBJECTS[s]) { console.error(`❌ Unknown subject id "${s}".`); process.exit(1); }
+  }
+  const topicFilter = args.topics ? new Set(args.topics.split(',').map((s) => s.trim())) : null;
+  const perTopic = Math.max(1, parseInt(args['per-topic'], 10) || 3);
+  const maxInsert = args.max ? parseInt(args.max, 10) : Infinity;
+
+  const mode = (args.mode || 'syllabus').toLowerCase();
+  if (!['syllabus', 'predict'].includes(mode)) { console.error('❌ --mode must be "syllabus" or "predict"'); process.exit(1); }
+  const source = mode === 'predict' ? 'predicted' : 'ai_original';
+  const genYear = args.year ? (parseInt(args.year, 10) || null) : null;
+
+  // Repository: production Postgres if available, else local Jsonl
+  let repo;
+  const dbUrl = process.env.DATABASE_URL || process.env.DATABASE_PUBLIC_URL;
+  if (dbUrl && !dryRun) {
+    process.env.DATABASE_URL = dbUrl;
+    repo = new PgRepository(dbUrl);
+    await repo.init();
+  } else {
+    repo = new JsonlRepository();
+    if (repo.init) await repo.init();
+  }
+
+  console.log(`\n🧠 Generator [${mode}] — model=${MODEL}  exams=[${exams.join(',')}]  subjects=${subjectIds.length}  per-topic=${perTopic}  source=${source}${genYear ? `  year=${genYear}` : ''}  ${dryRun ? '(DRY RUN — nothing written)' : ''}`);
+
+  const totals = { generated: 0, malformed: 0, dup: 0, rejected: 0, inserted: 0 };
+  const samples = [];
+
+  for (const exam of exams) {
+    const examLabel = Object.values(EXAM_TYPES).find((t) => t.id === exam).label;
+    for (const sid of subjectIds) {
+      const subject = SUBJECTS[sid];
+      const topics = subject.topics.filter((t) => !topicFilter || topicFilter.has(t));
+
+      // Build a dedup set from what's already banked for this subject+exam
+      const seen = new Set();
+      try {
+        const existing = await repo.getQuestionsBySubject(sid, 1_000_000, { exam });
+        for (const q of existing) seen.add(normText(q.text));
+      } catch { /* fresh bank / jsonl */ }
+
+      // Topic plan: predict weights toward historically-frequent topics; syllabus is uniform.
+      let plan;
+      if (mode === 'predict') {
+        const freq = await topicFrequency(repo, exam, sid);
+        plan = allocateByFrequency(topics, freq, perTopic);
+        const hot = plan.slice(0, 3).map((p) => `${p.topic}(${p.score})`).join(', ');
+        console.log(`   ${exam}/${sid}: 🔮 hottest topics → ${hot || 'no history yet (uniform)'}`);
+      } else {
+        plan = topics.map((t) => ({ topic: t, n: perTopic }));
+      }
+
+      let kept = 0;
+      for (const { topic, n } of plan) {
+        if (totals.inserted >= maxInsert) break;
+        let raw = [];
+        try {
+          raw = await generateForTopic(examLabel, subject.name, topic, n);
+        } catch (err) {
+          console.warn(`   ⚠️  gen failed [${exam}/${sid}/${topic}]: ${err.message}`);
+          continue;
+        }
+        totals.generated += raw.length;
+
+        for (const q of raw) {
+          if (totals.inserted >= maxInsert) break;
+          const nq = normalizeQuestion(q);
+          if (!nq) { totals.malformed++; continue; }
+          const key = normText(nq.text);
+          if (seen.has(key)) { totals.dup++; continue; }
+
+          let verdict;
+          try { verdict = await validateQuestion(examLabel, subject.name, nq); }
+          catch (err) { console.warn(`   ⚠️  validate failed: ${err.message}`); totals.rejected++; continue; }
+          if (!verdict.ok) { totals.rejected++; continue; }
+
+          seen.add(key);
+          const record = {
+            subject: sid, exam, year: genYear, topic, source,
+            difficulty: nq.difficulty, text: nq.text,
+            options: nq.options, answer: nq.answer, explanation: nq.explanation,
+          };
+
+          if (dryRun) { if (samples.length < 6) samples.push(record); }
+          else { await repo.addQuestion(record); }
+          totals.inserted++; kept++;
+        }
+        await sleep(400); // gentle pacing between topics
+      }
+      console.log(`   ${exam}/${sid}: +${kept} kept`);
+    }
+  }
+
+  console.log(`\n📊 generated=${totals.generated}  malformed=${totals.malformed}  duplicate=${totals.dup}  rejected=${totals.rejected}  ${dryRun ? 'would-insert' : 'inserted'}=${totals.inserted}`);
+  const passRate = totals.generated ? Math.round((totals.inserted / totals.generated) * 100) : 0;
+  console.log(`   validation pass rate: ${passRate}%`);
+
+  if (dryRun && samples.length) {
+    console.log('\n──────── SAMPLE (verified) questions ────────');
+    for (const s of samples) {
+      console.log(`\n[${s.exam}/${s.subject}/${s.topic} · ${DIFFICULTY_LABELS[s.difficulty]}]`);
+      console.log(s.text);
+      for (const k of ['A', 'B', 'C', 'D']) console.log(`  ${k}) ${s.options[k]}`);
+      console.log(`  ✓ ${s.answer} — ${s.explanation}`);
+    }
+  }
+
+  if (!dryRun) {
+    try { console.log(`\n🗄️  bank now holds ${await repo.getTotalQuestions()} questions.`); } catch { /* noop */ }
+  }
+  await repo.pool?.end?.().catch(() => {}); // close pg pool so the process can exit
+}
+
+function headerHelp() {
+  return 'Generate validated JAMB/SSCE questions into the bank.\n' +
+    '  --mode syllabus (default)   even coverage across all topics       (source=ai_original)\n' +
+    '  --mode predict --year 2026  weight toward historically-hot topics (source=predicted)\n\n' +
+    '  node scripts/generate-questions.js --exams jamb,ssce --subjects english,mathematics --per-topic 3\n' +
+    '  node scripts/generate-questions.js --mode predict --year 2026 --subjects mathematics --exams jamb\n' +
+    '  node scripts/generate-questions.js --subjects english --per-topic 2 --dry-run    # quality proof, no writes';
+}
+
+main().then(() => process.exit(0)).catch((err) => { console.error('FATAL:', err); process.exit(1); });
