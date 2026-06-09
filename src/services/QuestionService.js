@@ -140,12 +140,13 @@ export class QuestionService {
   }
 
   formatFeedback(result) {
-    const emoji = result.correct ? '✅' : '❌';
     let msg = result.correct
-      ? `${emoji} Correct!`
-      : `${emoji} Wrong. The answer is ${result.correctAnswer}.`;
+      ? `✅ Correct — nice work!`
+      : `❌ Not quite — the right answer is ${result.correctAnswer}. No stress, let's understand it:`;
 
+    // The explanation is the teaching moment — always show it, even when correct (it reinforces).
     if (result.explanation) msg += `\n\n💡 ${result.explanation}`;
+    else if (!result.correct) msg += `\n\n💡 Revisit this topic and you'll have it next time.`;
     return msg;
   }
 

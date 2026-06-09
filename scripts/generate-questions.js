@@ -151,13 +151,15 @@ async function chat(messages, { temperature = 0.7, retries = 3 } = {}) {
 // ─── Stage 1: generate ─────────────────────────────────────
 async function generateForTopic(examLabel, subjectName, topic, n) {
   const topicLabel = formatTopic(topic);
-  const sys = `You are a senior Nigerian examiner who writes ${examLabel} multiple-choice questions for ${subjectName}. ` +
+  const sys = `You are a senior Nigerian examiner AND a patient, encouraging teacher who writes ${examLabel} multiple-choice questions for ${subjectName}. ` +
     `Every question must: match the ${examLabel} syllabus and standard, be factually correct, have EXACTLY ONE correct option, ` +
-    `use four plausible options, be unambiguous, and use Nigerian context where natural. Avoid trick wording.`;
+    `use four plausible options, be unambiguous, and use Nigerian context where natural. Avoid trick wording. ` +
+    `Your goal is for the student to genuinely UNDERSTAND: every explanation must teach the underlying concept in clear, simple language — not merely state which option is correct.`;
   const user = `Generate ${n} ${examLabel} ${subjectName} multiple-choice questions on the topic "${topicLabel}". ` +
     `Vary the difficulty (some easy, some medium, some hard). ` +
+    `Write each "explanation" the way a good teacher would: in 1-3 plain-English sentences, give the key idea or the step-by-step working (for calculations) so the student learns WHY the answer is right — not just that it is. Be clear and encouraging; no jargon.\n` +
     `Return ONLY a JSON object of this exact shape:\n` +
-    `{"questions":[{"text":"...","options":{"A":"...","B":"...","C":"...","D":"..."},"answer":"A","difficulty":1,"explanation":"why the answer is correct"}]}\n` +
+    `{"questions":[{"text":"...","options":{"A":"...","B":"...","C":"...","D":"..."},"answer":"A","difficulty":1,"explanation":"a teacherly explanation that builds understanding"}]}\n` +
     `difficulty is 1 (easy), 2 (medium) or 3 (hard). No markdown, no commentary.`;
 
   const content = await chat(
