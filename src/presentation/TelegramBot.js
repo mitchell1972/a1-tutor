@@ -455,7 +455,7 @@ export class TelegramBotAdapter {
       [{ text: '📊 My Stats', callback_data: 'menu:stats' }],
       [{ text: '💳 Subscribe', callback_data: 'menu:subscribe' }],
       [{ text: '❓ Help', callback_data: 'menu:help' }],
-      [{ text: `${status} | ${user.subjects?.length || 0} subjects`, callback_data: 'menu:main' }],
+      [{ text: `${status} | ${user.subjects?.length || 0} subjects`, callback_data: 'menu:subscribe' }],
     ];
   }
 
