@@ -7,6 +7,7 @@ import { FlutterwaveGateway } from '../infrastructure/payment/FlutterwaveGateway
 import { TelegramChannel } from '../infrastructure/messaging/TelegramChannel.js';
 import { WhatsAppChannel } from '../infrastructure/messaging/WhatsAppChannel.js';
 import { CronScheduler } from '../infrastructure/scheduler/CronScheduler.js';
+import { runDailyGeneration } from '../infrastructure/generation/dailyGenerator.js';
 
 import { UserService } from '../services/UserService.js';
 import { QuestionService } from '../services/QuestionService.js';
@@ -73,8 +74,27 @@ export async function buildContainer(env) {
 
   // ─── Scheduler ─────────────────────────────────────
 
+  // Daily auto-generation (predict mode: examiner-weighted from real past questions, with a
+  // full-syllabus coverage floor). OFF unless GEN_ENABLED=true, so a deploy alone can't run up a
+  // bill. Tunables: GEN_PER_TOPIC (volume + even coverage), GEN_MAX_PER_EXAM (hard backstop),
+  // GEN_CRON (schedule, server TZ), GEN_MODE.
+  const dailyJobs = [];
+  if (env.GEN_ENABLED === 'true' || env.GEN_ENABLED === '1') {
+    dailyJobs.push({
+      name: 'question-generation',
+      cron: env.GEN_CRON || '0 2 * * *',   // 02:00 server time, daily
+      fn: () => runDailyGeneration({
+        perTopic: Number(env.GEN_PER_TOPIC) || 4,
+        maxPerExam: Number(env.GEN_MAX_PER_EXAM) || 700,
+        mode: env.GEN_MODE || 'predict',
+      }),
+    });
+    console.log('🧠 Daily question generation: ENABLED');
+  }
+
   const scheduler = new CronScheduler(
-    (hour, minute) => dispatchService.dispatchAt(hour, minute)
+    (hour, minute) => dispatchService.dispatchAt(hour, minute),
+    dailyJobs
   );
 
   // ─── Presentation ──────────────────────────────────
