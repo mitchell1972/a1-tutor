@@ -20,6 +20,10 @@
 //   --per-topic   questions to generate per (exam × subject × topic) before validation (default: 3)
 //   --dry-run     generate + validate, print samples, but do NOT insert into the bank
 //   --max         hard cap on total questions inserted this run (safety; default: unlimited)
+//   --ingest <p>  ingest harvested questions from a .jsonl file or dir (e.g. scraped past papers):
+//                 normalize -> two-stage validate -> dedup -> seed (keeps source/year/topic from the file)
+//   --no-validate (ingest only) trust the source's answer key; skip the independent re-solve pass
+//   --min-year/--max-year  (ingest only) only seed questions whose year falls in the window (e.g. --min-year 2016)
 //
 // Env:
 //   DEEPSEEK_API_KEY (or AI_API_KEY)         — required (unless --help)
@@ -32,6 +36,8 @@ import axios from 'axios';
 import { EXAM_TYPES, SUBJECTS, formatTopic } from '../src/config/subjects.js';
 import { PgRepository } from '../src/infrastructure/repositories/PgRepository.js';
 import { JsonlRepository } from '../src/infrastructure/repositories/JsonlRepository.js';
+import fs from 'node:fs';
+import path from 'node:path';
 
 // ─── Config ────────────────────────────────────────────────
 const API_KEY  = process.env.DEEPSEEK_API_KEY || process.env.AI_API_KEY;
@@ -49,10 +55,11 @@ const DIFFICULTY_LABELS = { 1: 'easy', 2: 'medium', 3: 'hard' };
 
 // ─── Tiny arg parser ───────────────────────────────────────
 function parseArgs(argv) {
-  const out = { exams: 'jamb,ssce', subjects: '', topics: '', 'per-topic': '3', mode: 'syllabus', year: '', 'dry-run': false, max: '' };
+  const out = { exams: 'jamb,ssce', subjects: '', topics: '', 'per-topic': '3', mode: 'syllabus', year: '', 'dry-run': false, max: '', ingest: '', 'no-validate': false, 'min-year': '', 'max-year': '' };
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--dry-run') out['dry-run'] = true;
+    else if (a === '--no-validate') out['no-validate'] = true;
     else if (a === '--help' || a === '-h') out.help = true;
     else if (a.startsWith('--')) out[a.slice(2)] = argv[++i];
   }
@@ -207,6 +214,7 @@ export function allocateByFrequency(topics, freq, perTopic) {
 async function main() {
   const args = parseArgs(process.argv);
   if (args.help) { console.log(headerHelp()); return; }
+  if (args.ingest) { await runIngest(args); return; }
 
   const dryRun = !!args['dry-run'];
   if (!API_KEY) {
@@ -337,13 +345,136 @@ async function main() {
   await repo.pool?.end?.().catch(() => {}); // close pg pool so the process can exit
 }
 
+// ─── Ingest: validate + seed externally-harvested questions (e.g. scraped past papers) ──
+// Reads bank-shaped JSONL records from a file or directory and runs them through the SAME
+// dedup + two-stage validator as generation. Scraped answer keys are frequently wrong, so by
+// default only questions whose answer the verifier independently confirms are seeded.
+async function runIngest(args) {
+  const dryRun = !!args['dry-run'];
+  const validate = !args['no-validate'];
+  if (validate && !API_KEY) {
+    console.error('❌ DEEPSEEK_API_KEY (or AI_API_KEY) is required to validate ingested questions — or pass --no-validate to trust the source keys.');
+    process.exit(1);
+  }
+
+  const target = args.ingest;
+  let files = [];
+  try {
+    const stat = fs.statSync(target);
+    files = stat.isDirectory()
+      ? fs.readdirSync(target).filter((f) => f.endsWith('.jsonl')).sort().map((f) => path.join(target, f))
+      : [target];
+  } catch {
+    console.error(`❌ --ingest path not found: ${target}`);
+    process.exit(1);
+  }
+  if (!files.length) { console.error(`❌ no .jsonl files found in ${target}`); process.exit(1); }
+
+  const maxInsert = args.max ? parseInt(args.max, 10) : Infinity;
+  const minYear = args['min-year'] ? parseInt(args['min-year'], 10) : null;
+  const maxYear = args['max-year'] ? parseInt(args['max-year'], 10) : null;
+
+  // Connect to Postgres if available (read for dedup even in dry-run; only writes are gated).
+  let repo;
+  const dbUrl = process.env.DATABASE_URL || process.env.DATABASE_PUBLIC_URL;
+  if (dbUrl) { process.env.DATABASE_URL = dbUrl; repo = new PgRepository(dbUrl); await repo.init(); }
+  else { repo = new JsonlRepository(); if (repo.init) await repo.init(); }
+
+  console.log(`\n📥 Ingest — files=${files.length}  validate=${validate ? `yes (model=${MODEL})` : 'NO (trusting source keys)'}  ${dryRun ? '(DRY RUN — nothing written)' : ''}`);
+
+  const totals = { read: 0, malformed: 0, dup: 0, rejected: 0, inserted: 0, outOfWindow: 0 };
+  const seenCache = new Map(); // `${exam}:${subject}` -> Set(normText) — primed from the bank, grows as we keep
+  const samples = [];
+
+  async function seenFor(exam, subject) {
+    const k = `${exam}:${subject}`;
+    if (seenCache.has(k)) return seenCache.get(k);
+    const set = new Set();
+    try {
+      const existing = await repo.getQuestionsBySubject(subject, 1_000_000, { exam });
+      for (const q of existing) set.add(normText(q.text));
+    } catch { /* fresh bank */ }
+    seenCache.set(k, set);
+    return set;
+  }
+
+  for (const file of files) {
+    if (totals.inserted >= maxInsert) break;
+    let lines = [];
+    try { lines = fs.readFileSync(file, 'utf8').split('\n').map((l) => l.trim()).filter(Boolean); }
+    catch (err) { console.warn(`   ⚠️  cannot read ${path.basename(file)}: ${err.message}`); continue; }
+
+    let kept = 0;
+    for (const line of lines) {
+      if (totals.inserted >= maxInsert) break;
+      totals.read++;
+      let rec;
+      try { rec = JSON.parse(line); } catch { totals.malformed++; continue; }
+
+      const sid = rec.subject, exam = rec.exam;
+      if (!SUBJECTS[sid] || !Object.values(EXAM_TYPES).some((t) => t.id === exam)) { totals.malformed++; continue; }
+      const recYear = Number.isInteger(rec.year) ? rec.year : parseInt(rec.year, 10);
+      if (recYear && ((minYear && recYear < minYear) || (maxYear && recYear > maxYear))) { totals.outOfWindow++; continue; }
+      const nq = normalizeQuestion(rec);
+      if (!nq) { totals.malformed++; continue; }
+
+      const seen = await seenFor(exam, sid);
+      const key = normText(nq.text);
+      if (seen.has(key)) { totals.dup++; continue; }
+
+      if (validate) {
+        const examLabel = Object.values(EXAM_TYPES).find((t) => t.id === exam).label;
+        let verdict;
+        try { verdict = await validateQuestion(examLabel, SUBJECTS[sid].name, nq); }
+        catch (err) { console.warn(`   ⚠️  validate failed: ${err.message}`); totals.rejected++; continue; }
+        if (!verdict.ok) { totals.rejected++; continue; }
+      }
+
+      seen.add(key);
+      const record = {
+        subject: sid, exam,
+        year: Number.isInteger(rec.year) ? rec.year : (parseInt(rec.year, 10) || null),
+        topic: rec.topic || 'general',
+        source: rec.source || 'past',
+        difficulty: nq.difficulty, text: nq.text,
+        options: nq.options, answer: nq.answer, explanation: nq.explanation,
+      };
+      if (dryRun) { if (samples.length < 8) samples.push(record); }
+      else { await repo.addQuestion(record); }
+      totals.inserted++; kept++;
+    }
+    console.log(`   ${path.basename(file)}: read ${lines.length} → +${kept} kept`);
+  }
+
+  console.log(`\n📊 read=${totals.read}  malformed=${totals.malformed}  out-of-window=${totals.outOfWindow}  duplicate=${totals.dup}  rejected=${totals.rejected}  ${dryRun ? 'would-insert' : 'inserted'}=${totals.inserted}`);
+  const passRate = totals.read ? Math.round((totals.inserted / totals.read) * 100) : 0;
+  console.log(`   ${validate ? 'verified-keep' : 'kept'} rate: ${passRate}%`);
+
+  if (dryRun && samples.length) {
+    console.log('\n──────── SAMPLE past questions ────────');
+    for (const s of samples) {
+      console.log(`\n[${s.exam}/${s.subject}/${s.topic}${s.year ? ' · ' + s.year : ''}]`);
+      console.log(s.text);
+      for (const k of ['A', 'B', 'C', 'D']) console.log(`  ${k}) ${s.options[k]}`);
+      console.log(`  ✓ ${s.answer}${s.explanation ? ' — ' + s.explanation : ''}`);
+    }
+  }
+
+  if (!dryRun) {
+    try { console.log(`\n🗄️  bank now holds ${await repo.getTotalQuestions()} questions.`); } catch { /* noop */ }
+  }
+  await repo.pool?.end?.().catch(() => {}); // close pg pool so the process can exit
+}
+
 function headerHelp() {
   return 'Generate validated JAMB/SSCE questions into the bank.\n' +
     '  --mode syllabus (default)   even coverage across all topics       (source=ai_original)\n' +
     '  --mode predict --year 2026  weight toward historically-hot topics (source=predicted)\n\n' +
     '  node scripts/generate-questions.js --exams jamb,ssce --subjects english,mathematics --per-topic 3\n' +
     '  node scripts/generate-questions.js --mode predict --year 2026 --subjects mathematics --exams jamb\n' +
-    '  node scripts/generate-questions.js --subjects english --per-topic 2 --dry-run    # quality proof, no writes';
+    '  node scripts/generate-questions.js --subjects english --per-topic 2 --dry-run    # quality proof, no writes\n\n' +
+    '  --ingest <file|dir>          validate + seed harvested questions (e.g. scraped past papers); --no-validate trusts source keys\n' +
+    '  node scripts/generate-questions.js --ingest data/scraped --dry-run               # preview what would be kept';
 }
 
 main().then(() => process.exit(0)).catch((err) => { console.error('FATAL:', err); process.exit(1); });

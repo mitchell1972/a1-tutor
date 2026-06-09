@@ -73,7 +73,17 @@ export class PgRepository {
   }
 
   async init() {
-    await this.pool.query(SCHEMA);
+    // Serialize schema setup across concurrent processes. Running the DDL (ALTER TABLE /
+    // CREATE INDEX) from many parallel generator runs at once deadlocks — both against each
+    // other and against concurrent inserts. A session advisory lock makes inits wait their turn.
+    const client = await this.pool.connect();
+    try {
+      await client.query('SELECT pg_advisory_lock($1)', [72727401]);
+      await client.query(SCHEMA);
+    } finally {
+      await client.query('SELECT pg_advisory_unlock($1)', [72727401]).catch(() => {});
+      client.release();
+    }
   }
 
   async end() {
