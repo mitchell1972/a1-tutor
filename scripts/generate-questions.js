@@ -24,6 +24,8 @@
 //                 normalize -> two-stage validate -> dedup -> seed (keeps source/year/topic from the file)
 //   --no-validate (ingest only) trust the source's answer key; skip the independent re-solve pass
 //   --min-year/--max-year  (ingest only) only seed questions whose year falls in the window (e.g. --min-year 2016)
+//   --floor       (predict) minimum questions per syllabus topic — the full-coverage guarantee (default 2)
+//   --analyze     (predict) print the AI-predicted per-topic plan for each subject and exit — no generation
 //
 // Env:
 //   DEEPSEEK_API_KEY (or AI_API_KEY)         — required (unless --help)
@@ -55,11 +57,12 @@ const DIFFICULTY_LABELS = { 1: 'easy', 2: 'medium', 3: 'hard' };
 
 // ─── Tiny arg parser ───────────────────────────────────────
 function parseArgs(argv) {
-  const out = { exams: 'jamb,ssce', subjects: '', topics: '', 'per-topic': '3', mode: 'syllabus', year: '', 'dry-run': false, max: '', ingest: '', 'no-validate': false, 'min-year': '', 'max-year': '' };
+  const out = { exams: 'jamb,ssce', subjects: '', topics: '', 'per-topic': '3', mode: 'syllabus', year: '', 'dry-run': false, max: '', ingest: '', 'no-validate': false, 'min-year': '', 'max-year': '', floor: '', analyze: false };
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--dry-run') out['dry-run'] = true;
     else if (a === '--no-validate') out['no-validate'] = true;
+    else if (a === '--analyze') out.analyze = true;
     else if (a === '--help' || a === '-h') out.help = true;
     else if (a.startsWith('--')) out[a.slice(2)] = argv[++i];
   }
@@ -210,6 +213,68 @@ export function allocateByFrequency(topics, freq, perTopic) {
     .sort((a, b) => b.n - a.n);
 }
 
+// ─── Prediction: examiner-style planning from real past questions ──
+// Reads the granular topics of banked PAST questions (source=past) for this exam+subject and
+// returns Map<granularTopic, {total, recent}> (recent = year >= 2022) — the empirical signal.
+async function pastTopicDistribution(repo, exam, subjectId) {
+  let rows = [];
+  try { rows = await repo.getQuestionsBySubject(subjectId, 1_000_000, { exam }); } catch { /* fresh bank */ }
+  const dist = new Map();
+  for (const r of rows) {
+    if (r.source !== 'past') continue;            // only REAL past questions inform the prediction
+    const t = String(r.topic || '').trim().toLowerCase();
+    if (!t || t === 'general') continue;          // skip untagged
+    const cur = dist.get(t) || { total: 0, recent: 0 };
+    cur.total += 1;
+    if ((Number(r.year) || 0) >= 2022) cur.recent += 1;
+    dist.set(t, cur);
+  }
+  return dist;
+}
+
+// Examiner-style planner: maps the granular past-question areas onto the syllabus topic ids,
+// allocates MORE to hot areas, but guarantees every syllabus topic at least `floor`. The code
+// then RECONCILES the model's answer against the real syllabus so coverage holds no matter what
+// the model returns (every topic present once, integer n >= floor; missing → perTopic fallback).
+async function planExamCoverage(examLabel, subject, pastDist, perTopic, floor) {
+  const topics = subject.topics;
+  const target = perTopic * topics.length;
+  const ranked = [...pastDist.entries()].sort((a, b) => b[1].total - a[1].total).slice(0, 30);
+  const signal = ranked.length
+    ? ranked.map(([t, c]) => `${t} (${c.total}${c.recent ? `, ${c.recent} since 2022` : ''})`).join('\n')
+    : '(no tagged past questions for this subject)';
+
+  const sys = `You are a senior ${examLabel} ${subject.name} examiner and exam strategist. You decide how many ` +
+    `practice questions to write per syllabus topic so a student is drilled hardest on what examiners actually ` +
+    `test most, while STILL covering every part of the syllabus so nothing can catch them out.`;
+  const user = `SYLLABUS TOPIC IDS (use these EXACT ids; every one must appear once, each with at least ${floor}):\n` +
+    `${topics.join(', ')}\n\n` +
+    `REAL PAST-QUESTION FREQUENCY — ${examLabel} ${subject.name}, 2016-2025 (descriptive area -> times seen). ` +
+    `Map these onto the syllabus ids to judge which are HOT; higher count and more "since 2022" = hotter:\n${signal}\n\n` +
+    `Allocate about ${target} questions total across the syllabus topics. Rules:\n` +
+    `- Every syllabus topic gets at least ${floor} (full-coverage guarantee for trust).\n` +
+    `- Give visibly more to the hot topics the past data implies; keep cold ones at or near ${floor}.\n` +
+    `- Mark hot=true only for the genuinely high-frequency topics.\n` +
+    `- Return ONLY JSON: {"plan":[{"topic":"<exact syllabus id>","n":<integer >= ${floor}>,"hot":true|false,"why":"<= 6 words"}]}\n` +
+    `- Include EVERY syllabus topic exactly once. No prose, no markdown.`;
+
+  let parsed = null;
+  try {
+    const content = await chat([{ role: 'system', content: sys }, { role: 'user', content: user }], { temperature: 0.3 });
+    parsed = extractJson(content);
+  } catch (err) {
+    console.warn(`   ⚠️  planner failed (${err.message}) — falling back to uniform coverage`);
+  }
+  const byId = new Map((Array.isArray(parsed?.plan) ? parsed.plan : []).map((p) => [String(p.topic), p]));
+  return topics
+    .map((t) => {
+      const p = byId.get(t);
+      const n = p ? Math.max(floor, Math.round(Number(p.n)) || floor) : perTopic; // missing → uniform fallback
+      return { topic: t, n, hot: !!(p && p.hot), why: (p && typeof p.why === 'string') ? p.why.slice(0, 40) : '' };
+    })
+    .sort((a, b) => b.n - a.n);
+}
+
 // ─── Main ──────────────────────────────────────────────────
 async function main() {
   const args = parseArgs(process.argv);
@@ -237,6 +302,8 @@ async function main() {
   const topicFilter = args.topics ? new Set(args.topics.split(',').map((s) => s.trim())) : null;
   const perTopic = Math.max(1, parseInt(args['per-topic'], 10) || 3);
   const maxInsert = args.max ? parseInt(args.max, 10) : Infinity;
+  const floor = args.floor ? Math.max(1, parseInt(args.floor, 10) || 2) : 2;
+  const analyze = !!args.analyze;
 
   const mode = (args.mode || 'syllabus').toLowerCase();
   if (!['syllabus', 'predict'].includes(mode)) { console.error('❌ --mode must be "syllabus" or "predict"'); process.exit(1); }
@@ -273,13 +340,21 @@ async function main() {
         for (const q of existing) seen.add(normText(q.text));
       } catch { /* fresh bank / jsonl */ }
 
-      // Topic plan: predict weights toward historically-frequent topics; syllabus is uniform.
+      // Topic plan:
+      //   predict → an examiner-style AI planner reads the real past-question frequency and gives
+      //             hot syllabus areas more questions while guaranteeing every topic >= floor
+      //             (coverage for trust). syllabus → uniform coverage across all topics.
       let plan;
-      if (mode === 'predict') {
-        const freq = await topicFrequency(repo, exam, sid);
-        plan = allocateByFrequency(topics, freq, perTopic);
-        const hot = plan.slice(0, 3).map((p) => `${p.topic}(${p.score})`).join(', ');
-        console.log(`   ${exam}/${sid}: 🔮 hottest topics → ${hot || 'no history yet (uniform)'}`);
+      if (mode === 'predict' || analyze) {
+        const pastDist = await pastTopicDistribution(repo, exam, sid);
+        plan = await planExamCoverage(examLabel, subject, pastDist, perTopic, floor);
+        const hot = plan.filter((p) => p.hot).slice(0, 6).map((p) => `${p.topic}(${p.n})`).join(', ');
+        const tagged = [...pastDist.values()].reduce((a, c) => a + c.total, 0);
+        console.log(`   ${exam}/${sid}: 🔮 predicted-hot → ${hot || '(no past-question signal — uniform)'}  | floor=${floor} | plan=${plan.reduce((a, p) => a + p.n, 0)}q across ${plan.length} topics (from ${tagged} tagged past Qs)`);
+        if (analyze) {
+          for (const p of plan) console.log(`        ${p.hot ? '🔥' : '  '} ${String(p.n).padStart(2)}  ${p.topic}${p.why ? ` — ${p.why}` : ''}`);
+          continue; // --analyze = prediction report only, no generation
+        }
       } else {
         plan = topics.map((t) => ({ topic: t, n: perTopic }));
       }
@@ -468,10 +543,14 @@ async function runIngest(args) {
 
 function headerHelp() {
   return 'Generate validated JAMB/SSCE questions into the bank.\n' +
-    '  --mode syllabus (default)   even coverage across all topics       (source=ai_original)\n' +
-    '  --mode predict --year 2026  weight toward historically-hot topics (source=predicted)\n\n' +
+    '  --mode syllabus (default)   even coverage across every syllabus topic        (source=ai_original)\n' +
+    '  --mode predict [--year Y]   examiner-style AI planner reads real past-question frequency, weights\n' +
+    '                              generation toward hot areas, floors every topic for coverage (source=predicted)\n' +
+    '  --floor N                   (predict) min questions per topic — the coverage guarantee (default 2)\n' +
+    '  --analyze                   (predict) print the predicted per-topic plan per subject and exit (no generation)\n\n' +
     '  node scripts/generate-questions.js --exams jamb,ssce --subjects english,mathematics --per-topic 3\n' +
-    '  node scripts/generate-questions.js --mode predict --year 2026 --subjects mathematics --exams jamb\n' +
+    '  node scripts/generate-questions.js --mode predict --year 2026 --subjects physics --exams jamb\n' +
+    '  node scripts/generate-questions.js --mode predict --analyze --subjects physics --exams jamb   # see the prediction\n' +
     '  node scripts/generate-questions.js --subjects english --per-topic 2 --dry-run    # quality proof, no writes\n\n' +
     '  --ingest <file|dir>          validate + seed harvested questions (e.g. scraped past papers); --no-validate trusts source keys\n' +
     '  node scripts/generate-questions.js --ingest data/scraped --dry-run               # preview what would be kept';
