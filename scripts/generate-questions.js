@@ -27,6 +27,7 @@
 //   --floor       (predict) minimum questions per syllabus topic — the full-coverage guarantee (default 2)
 //   --analyze     (predict) print the AI-predicted per-topic plan for each subject and exit — no generation
 //   --retag       reclassify past questions tagged "general"/untagged onto syllabus topics (sharpens prediction)
+//   --reteach     rewrite EXISTING question explanations in a clear, teacherly voice (whole bank; scope with --exams/--subjects)
 //
 // Env:
 //   DEEPSEEK_API_KEY (or AI_API_KEY)         — required (unless --help)
@@ -58,13 +59,14 @@ const DIFFICULTY_LABELS = { 1: 'easy', 2: 'medium', 3: 'hard' };
 
 // ─── Tiny arg parser ───────────────────────────────────────
 function parseArgs(argv) {
-  const out = { exams: 'jamb,ssce', subjects: '', topics: '', 'per-topic': '3', mode: 'syllabus', year: '', 'dry-run': false, max: '', ingest: '', 'no-validate': false, 'min-year': '', 'max-year': '', floor: '', analyze: false, retag: false };
+  const out = { exams: 'jamb,ssce', subjects: '', topics: '', 'per-topic': '3', mode: 'syllabus', year: '', 'dry-run': false, max: '', ingest: '', 'no-validate': false, 'min-year': '', 'max-year': '', floor: '', analyze: false, retag: false, reteach: false };
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--dry-run') out['dry-run'] = true;
     else if (a === '--no-validate') out['no-validate'] = true;
     else if (a === '--analyze') out.analyze = true;
     else if (a === '--retag') out.retag = true;
+    else if (a === '--reteach') out.reteach = true;
     else if (a === '--help' || a === '-h') out.help = true;
     else if (a.startsWith('--')) out[a.slice(2)] = argv[++i];
   }
@@ -285,6 +287,7 @@ async function main() {
   if (args.help) { console.log(headerHelp()); return; }
   if (args.ingest) { await runIngest(args); return; }
   if (args.retag) { await runRetag(args); return; }
+  if (args.reteach) { await runReteach(args); return; }
 
   const dryRun = !!args['dry-run'];
   if (!API_KEY) {
@@ -613,6 +616,83 @@ async function runRetag(args) {
   await repo.pool?.end?.().catch(() => {});
 }
 
+// ─── Re-teach: rewrite EXISTING explanations in a clear, teacherly voice ──
+// Rewrites only the explanation field of banked questions (keeps text/options/answer).
+async function rewriteExplanations(examLabel, subjectName, questions) {
+  const items = questions.map((q, i) => {
+    const o = q.options || {};
+    return `${i}. Q: ${q.text}\n   A) ${o.A}  B) ${o.B}  C) ${o.C}  D) ${o.D}\n   Correct answer: ${q.answer}`;
+  }).join('\n\n');
+  const sys = `You are a patient, encouraging ${examLabel} ${subjectName} teacher. For each question, write a short explanation that helps a student UNDERSTAND why the correct answer is right — give the key concept or the step-by-step working, in clear plain English, no jargon, 1-3 sentences. Do not merely restate the answer.`;
+  const user = `Rewrite the explanation for each numbered question below.\n\n${items}\n\n` +
+    `Return ONLY JSON: {"explanations":[{"i":<index>,"explanation":"..."}]}. Include every index. Plain text only, no markdown.`;
+  let parsed = null;
+  try {
+    const content = await chat([{ role: 'system', content: sys }, { role: 'user', content: user }], { temperature: 0.4 });
+    parsed = extractJson(content);
+  } catch (err) { console.warn(`   ⚠️  reteach call failed: ${err.message}`); }
+  const map = new Map((Array.isArray(parsed?.explanations) ? parsed.explanations : []).map((e) => [Number(e.i), String(e.explanation || '')]));
+  return questions.map((_, i) => map.get(i));
+}
+
+async function runReteach(args) {
+  const dryRun = !!args['dry-run'];
+  if (!API_KEY) { console.error('❌ DEEPSEEK_API_KEY (or AI_API_KEY) is required for --reteach.'); process.exit(1); }
+  const dbUrl = process.env.DATABASE_URL || process.env.DATABASE_PUBLIC_URL;
+  if (!dbUrl) { console.error('❌ --reteach operates on the live bank — set DATABASE_URL.'); process.exit(1); }
+  process.env.DATABASE_URL = dbUrl;
+  const repo = new PgRepository(dbUrl);
+  await repo.init();
+
+  // Scope only if flags were explicitly passed; otherwise rewrite the WHOLE bank.
+  const examFilter = process.argv.includes('--exams') ? new Set(args.exams.split(',').map((s) => s.trim())) : null;
+  const subjFilter = args.subjects ? new Set(args.subjects.split(',').map((s) => s.trim())) : null;
+  const maxN = args.max ? parseInt(args.max, 10) : Infinity;
+
+  let pool = (await repo.all('questions'))
+    .filter((q) => (!examFilter || examFilter.has(q.exam)) && (!subjFilter || subjFilter.has(q.subject)));
+  if (pool.length > maxN) pool = pool.slice(0, maxN);
+
+  console.log(`\n📖 Re-teach — rewriting explanations for ${pool.length} questions${dryRun ? '  (DRY RUN — nothing written)' : ''}`);
+
+  const groups = new Map();   // exam|subject -> [questions] (coherent teacher voice per group)
+  for (const q of pool) { const k = `${q.exam}|${q.subject}`; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(q); }
+
+  const BATCH = 6;
+  const totals = { rewritten: 0, skipped: 0 };
+  const samples = [];
+
+  for (const [k, qs] of groups) {
+    const [exam, subject] = k.split('|');
+    const examLabel = Object.values(EXAM_TYPES).find((t) => t.id === exam)?.label || exam;
+    const subjectName = SUBJECTS[subject]?.name || subject;
+    let kept = 0;
+    for (let i = 0; i < qs.length; i += BATCH) {
+      const chunk = qs.slice(i, i + BATCH);
+      const exps = await rewriteExplanations(examLabel, subjectName, chunk);
+      for (let j = 0; j < chunk.length; j++) {
+        const e = (exps[j] || '').trim();
+        if (e.length >= 10) {
+          if (dryRun) { if (samples.length < 5) samples.push({ q: chunk[j].text, before: chunk[j].explanation, after: e }); }
+          else { await repo.updateQuestionExplanation(chunk[j].id, e); }
+          totals.rewritten++; kept++;
+        } else { totals.skipped++; }   // keep the old explanation if the model returned nothing usable
+      }
+    }
+    console.log(`   ${exam}/${subject}: ${kept}/${qs.length} rewritten`);
+  }
+
+  console.log(`\n📊 rewritten=${totals.rewritten}  skipped=${totals.skipped}${dryRun ? '  (DRY RUN — nothing written)' : ''}`);
+  if (dryRun) {
+    for (const s of samples) {
+      console.log(`\nQ: ${s.q}`);
+      console.log(`  BEFORE: ${s.before || '(none)'}`);
+      console.log(`  AFTER:  ${s.after}`);
+    }
+  }
+  await repo.pool?.end?.().catch(() => {});
+}
+
 function headerHelp() {
   return 'Generate validated JAMB/SSCE questions into the bank.\n' +
     '  --mode syllabus (default)   even coverage across every syllabus topic        (source=ai_original)\n' +
@@ -627,7 +707,9 @@ function headerHelp() {
     '  --ingest <file|dir>          validate + seed harvested questions (e.g. scraped past papers); --no-validate trusts source keys\n' +
     '  node scripts/generate-questions.js --ingest data/scraped --dry-run               # preview what would be kept\n\n' +
     '  --retag                      reclassify "general"/untagged past questions onto syllabus topics (sharpens prediction)\n' +
-    '  node scripts/generate-questions.js --retag --dry-run                              # preview the re-tagging';
+    '  node scripts/generate-questions.js --retag --dry-run                              # preview the re-tagging\n\n' +
+    '  --reteach                    rewrite EXISTING explanations in a clear, teacherly voice (whole bank, or scope it)\n' +
+    '  node scripts/generate-questions.js --reteach --subjects english --exams jamb --dry-run   # preview before/after';
 }
 
 main().then(() => process.exit(0)).catch((err) => { console.error('FATAL:', err); process.exit(1); });
