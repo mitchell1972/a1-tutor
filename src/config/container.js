@@ -82,7 +82,7 @@ export async function buildContainer(env) {
   if (env.GEN_ENABLED === 'true' || env.GEN_ENABLED === '1') {
     dailyJobs.push({
       name: 'question-generation',
-      cron: env.GEN_CRON || '0 2 * * *',   // 02:00 server time, daily
+      cron: env.GEN_CRON || '0 4 * * *',   // 04:00 server time (UTC), daily
       fn: () => runDailyGeneration({
         perTopic: Number(env.GEN_PER_TOPIC) || 4,
         maxPerExam: Number(env.GEN_MAX_PER_EXAM) || 700,
