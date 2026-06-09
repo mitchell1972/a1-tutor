@@ -226,6 +226,10 @@ export class PgRepository {
     );
   }
 
+  async updateQuestionTopic(id, topic) {
+    await this.pool.query('UPDATE questions SET topic = $1 WHERE id = $2', [topic, id]);
+  }
+
   async getTotalQuestions() {
     const { rows } = await this.pool.query('SELECT count(*)::int AS n FROM questions');
     return rows[0].n;

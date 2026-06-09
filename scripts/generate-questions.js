@@ -26,6 +26,7 @@
 //   --min-year/--max-year  (ingest only) only seed questions whose year falls in the window (e.g. --min-year 2016)
 //   --floor       (predict) minimum questions per syllabus topic — the full-coverage guarantee (default 2)
 //   --analyze     (predict) print the AI-predicted per-topic plan for each subject and exit — no generation
+//   --retag       reclassify past questions tagged "general"/untagged onto syllabus topics (sharpens prediction)
 //
 // Env:
 //   DEEPSEEK_API_KEY (or AI_API_KEY)         — required (unless --help)
@@ -57,12 +58,13 @@ const DIFFICULTY_LABELS = { 1: 'easy', 2: 'medium', 3: 'hard' };
 
 // ─── Tiny arg parser ───────────────────────────────────────
 function parseArgs(argv) {
-  const out = { exams: 'jamb,ssce', subjects: '', topics: '', 'per-topic': '3', mode: 'syllabus', year: '', 'dry-run': false, max: '', ingest: '', 'no-validate': false, 'min-year': '', 'max-year': '', floor: '', analyze: false };
+  const out = { exams: 'jamb,ssce', subjects: '', topics: '', 'per-topic': '3', mode: 'syllabus', year: '', 'dry-run': false, max: '', ingest: '', 'no-validate': false, 'min-year': '', 'max-year': '', floor: '', analyze: false, retag: false };
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--dry-run') out['dry-run'] = true;
     else if (a === '--no-validate') out['no-validate'] = true;
     else if (a === '--analyze') out.analyze = true;
+    else if (a === '--retag') out.retag = true;
     else if (a === '--help' || a === '-h') out.help = true;
     else if (a.startsWith('--')) out[a.slice(2)] = argv[++i];
   }
@@ -280,6 +282,7 @@ async function main() {
   const args = parseArgs(process.argv);
   if (args.help) { console.log(headerHelp()); return; }
   if (args.ingest) { await runIngest(args); return; }
+  if (args.retag) { await runRetag(args); return; }
 
   const dryRun = !!args['dry-run'];
   if (!API_KEY) {
@@ -541,6 +544,73 @@ async function runIngest(args) {
   await repo.pool?.end?.().catch(() => {}); // close pg pool so the process can exit
 }
 
+// ─── Re-tag: classify untagged ("general"/null) past questions onto syllabus topic ids ──
+// Past questions scraped without a clean topic contribute NO signal to the predict planner.
+// This reclassifies each into the subject's syllabus taxonomy so prediction sharpens everywhere.
+async function classifyTopics(examLabel, subject, questions) {
+  const ids = subject.topics;
+  const list = questions.map((q, i) => `${i}. ${String(q.text).slice(0, 240)}`).join('\n');
+  const sys = `You are a ${examLabel} ${subject.name} examiner. Classify each question into the single most appropriate syllabus topic.`;
+  const user = `SYLLABUS TOPIC IDS: ${ids.join(', ')}\n\n` +
+    `For each numbered question below, choose the ONE best-fitting topic id from the list above.\n${list}\n\n` +
+    `Return ONLY JSON: {"labels":[{"i":<index>,"topic":"<exact id from the list>"}]}. Use only the given ids; include every index.`;
+  let parsed = null;
+  try {
+    const content = await chat([{ role: 'system', content: sys }, { role: 'user', content: user }], { temperature: 0 });
+    parsed = extractJson(content);
+  } catch (err) { console.warn(`   ⚠️  classify failed: ${err.message}`); }
+  const map = new Map((Array.isArray(parsed?.labels) ? parsed.labels : []).map((l) => [Number(l.i), String(l.topic)]));
+  return questions.map((_, i) => map.get(i));
+}
+
+async function runRetag(args) {
+  const dryRun = !!args['dry-run'];
+  if (!API_KEY) { console.error('❌ DEEPSEEK_API_KEY (or AI_API_KEY) is required for --retag.'); process.exit(1); }
+  const dbUrl = process.env.DATABASE_URL || process.env.DATABASE_PUBLIC_URL;
+  if (!dbUrl) { console.error('❌ --retag operates on the live bank — set DATABASE_URL.'); process.exit(1); }
+  process.env.DATABASE_URL = dbUrl;
+  const repo = new PgRepository(dbUrl);
+  await repo.init();
+
+  const exams = args.exams.split(',').map((s) => s.trim()).filter(Boolean);
+  const subjectIds = (args.subjects ? args.subjects.split(',') : SECONDARY_SUBJECTS).map((s) => s.trim()).filter(Boolean);
+  const BATCH = 10;
+
+  console.log(`\n🏷️  Re-tag — exams=[${exams.join(',')}]  subjects=${subjectIds.length}  ${dryRun ? '(DRY RUN — nothing written)' : ''}`);
+  const totals = { scanned: 0, retagged: 0 };
+
+  for (const exam of exams) {
+    const et = Object.values(EXAM_TYPES).find((t) => t.id === exam);
+    if (!et) { console.warn(`   ⚠️  unknown exam "${exam}"`); continue; }
+    for (const sid of subjectIds) {
+      const subject = SUBJECTS[sid];
+      if (!subject) continue;
+      const valid = new Set(subject.topics);
+      let rows = [];
+      try { rows = await repo.getQuestionsBySubject(sid, 1_000_000, { exam }); } catch { /* fresh */ }
+      const todo = rows.filter((r) => r.source === 'past' && (!r.topic || String(r.topic).trim().toLowerCase() === 'general'));
+      if (!todo.length) continue;
+      totals.scanned += todo.length;
+      let tagged = 0;
+      for (let i = 0; i < todo.length; i += BATCH) {
+        const chunk = todo.slice(i, i + BATCH);
+        const labels = await classifyTopics(et.label, subject, chunk);
+        for (let j = 0; j < chunk.length; j++) {
+          const t = labels[j];
+          if (t && valid.has(t)) {
+            if (!dryRun) await repo.updateQuestionTopic(chunk[j].id, t);
+            tagged++;
+          }
+        }
+      }
+      totals.retagged += tagged;
+      console.log(`   ${exam}/${sid}: re-tagged ${tagged}/${todo.length}`);
+    }
+  }
+  console.log(`\n📊 scanned=${totals.scanned}  re-tagged=${totals.retagged}${dryRun ? '  (DRY RUN — nothing written)' : ''}`);
+  await repo.pool?.end?.().catch(() => {});
+}
+
 function headerHelp() {
   return 'Generate validated JAMB/SSCE questions into the bank.\n' +
     '  --mode syllabus (default)   even coverage across every syllabus topic        (source=ai_original)\n' +
@@ -553,7 +623,9 @@ function headerHelp() {
     '  node scripts/generate-questions.js --mode predict --analyze --subjects physics --exams jamb   # see the prediction\n' +
     '  node scripts/generate-questions.js --subjects english --per-topic 2 --dry-run    # quality proof, no writes\n\n' +
     '  --ingest <file|dir>          validate + seed harvested questions (e.g. scraped past papers); --no-validate trusts source keys\n' +
-    '  node scripts/generate-questions.js --ingest data/scraped --dry-run               # preview what would be kept';
+    '  node scripts/generate-questions.js --ingest data/scraped --dry-run               # preview what would be kept\n\n' +
+    '  --retag                      reclassify "general"/untagged past questions onto syllabus topics (sharpens prediction)\n' +
+    '  node scripts/generate-questions.js --retag --dry-run                              # preview the re-tagging';
 }
 
 main().then(() => process.exit(0)).catch((err) => { console.error('FATAL:', err); process.exit(1); });
