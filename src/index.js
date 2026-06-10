@@ -27,17 +27,18 @@ async function main() {
     // 3a. Ingest pending scraped questions if any
     try {
       const { execSync } = await import('node:child_process');
-      const ingestFile = new URL('../../pending/ingest_now.jsonl', import.meta.url).pathname;
-      const { existsSync } = await import('node:fs');
+      const { existsSync, unlinkSync } = await import('node:fs');
+      const { resolve } = await import('node:path');
+      const ingestFile = resolve('pending/ingest_now.jsonl');
+      console.log(`📥 Checking for ingest file at: ${ingestFile}`);
       if (existsSync(ingestFile)) {
         console.log('📥 Pending ingest file found — processing...');
-        const generateScript = new URL('../../scripts/generate-questions.js', import.meta.url).pathname;
+        const generateScript = resolve('scripts/generate-questions.js');
         execSync(`node ${generateScript} --ingest ${ingestFile} --no-validate`, {
           env: process.env,
           stdio: 'inherit',
-          timeout: 300000, // 5 minutes
+          timeout: 300000,
         });
-        const { unlinkSync } = await import('node:fs');
         unlinkSync(ingestFile);
         questionCount = await container.repo.getTotalQuestions();
         console.log(`📦 Questions after ingest: ${questionCount}`);
