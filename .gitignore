@@ -7,3 +7,4 @@ data/*.jsonl
 .pgurl
 !data/ingest_now.jsonl
 !data/ingest_now.jsonl
+data/scraped/

@@ -1,8 +1,0 @@
-{
-  "note": "Flat extract of edupadi pages 2016 p1 (first 10), 2017 p1 (next 10), 2019 p1 (last 10). Segmented by page order.",
-  "segments": [
-    {"year": 2016, "url": "https://edupadi.com/classroom/lessons/jamb/physics/2016/page/1", "start": 0, "end": 10},
-    {"year": 2017, "url": "https://edupadi.com/classroom/lessons/jamb/physics/2017/page/1", "start": 10, "end": 20},
-    {"year": 2019, "url": "https://edupadi.com/classroom/lessons/jamb/physics/2019/page/1", "start": 20, "end": 30}
-  ]
-}
