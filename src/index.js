@@ -24,16 +24,28 @@ async function main() {
     let questionCount = await container.repo.getTotalQuestions();
     console.log(`📦 Questions in bank: ${questionCount}`);
 
-    // 3a. Check for pending ingest (new scraped questions to validate and add)
+    // 3a. Ingest pending scraped questions if any
     try {
-      const { default: ingestPending } = await import('../scripts/ingest-pending.js');
-      const result = await ingestPending();
-      if (result.ingested > 0) {
+      const { execSync } = await import('node:child_process');
+      const ingestFile = new URL('../../pending/ingest_now.jsonl', import.meta.url).pathname;
+      const { existsSync } = await import('node:fs');
+      if (existsSync(ingestFile)) {
+        console.log('📥 Pending ingest file found — processing...');
+        const generateScript = new URL('../../scripts/generate-questions.js', import.meta.url).pathname;
+        execSync(`node ${generateScript} --ingest ${ingestFile} --no-validate`, {
+          env: process.env,
+          stdio: 'inherit',
+          timeout: 300000, // 5 minutes
+        });
+        const { unlinkSync } = await import('node:fs');
+        unlinkSync(ingestFile);
         questionCount = await container.repo.getTotalQuestions();
         console.log(`📦 Questions after ingest: ${questionCount}`);
+      } else {
+        console.log('📥 No pending ingest file.');
       }
     } catch (e) {
-      console.warn('⚠️  Pending ingest skipped:', e.message);
+      console.error('⚠️  Pending ingest failed:', e.message || e);
     }
 
     if (questionCount === 0) {
