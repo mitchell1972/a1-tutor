@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
-const INGEST_FILE = path.resolve(dir, '../data/ingest_now.jsonl');
+const INGEST_FILE = path.resolve(dir, '../pending/ingest_now.jsonl');
 const GENERATOR = path.resolve(dir, 'generate-questions.js');
 
 async function main() {
