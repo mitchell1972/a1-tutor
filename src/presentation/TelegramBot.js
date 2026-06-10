@@ -4,7 +4,7 @@
 import { SUBJECTS, SUBJECT_PRESETS, EXAM_TYPES, QUESTIONS_PER_SUBJECT, TRIAL_DAYS } from '../config/subjects.js';
 
 export class TelegramBotAdapter {
-  constructor({ channel, userService, questionService, subscriptionService, paymentService, dispatchService, analyticsService }) {
+  constructor({ channel, userService, questionService, subscriptionService, paymentService, dispatchService, analyticsService, coachService }) {
     this.tg = channel;
     this.userService = userService;
     this.questionService = questionService;
@@ -12,6 +12,7 @@ export class TelegramBotAdapter {
     this.paymentService = paymentService;
     this.dispatchService = dispatchService;
     this.analyticsService = analyticsService;
+    this.coachService = coachService;
 
     this._registerHandlers();
   }
@@ -30,6 +31,7 @@ export class TelegramBotAdapter {
     this.tg.onText(/\/stats/, this._handleStatsCmd.bind(this));
     this.tg.onText(/\/subscribe/, this._handleSubscribeCmd.bind(this));
     this.tg.onText(/\/cancel/, this._handleCancelCmd.bind(this));
+    this.tg.onText(/\/coach/, this._handleCoachCmd.bind(this));
     this.tg.onCallback(this._handleCallback.bind(this));
   }
 
@@ -257,6 +259,7 @@ export class TelegramBotAdapter {
       case 'stats':     return this._showStats(chatId, user);
       case 'subscribe': return this._showSubscription(chatId, user);
       case 'savecard':  return this._showSaveCard(chatId, user);
+      case 'coach':     return this._sendCoachNote(chatId, user);
       case 'help':      return this._showHelp(chatId, user);
       case 'main':
       default:          return this.tg.sendWithKeyboard(chatId, '📋 Main Menu', this._mainMenuKeyboard(user));
@@ -434,16 +437,50 @@ export class TelegramBotAdapter {
     let msg = `📊 *Your Stats*\n\n`;
     msg += `🔥 Streak: ${analytics.streak} day${analytics.streak !== 1 ? 's' : ''}\n`;
     msg += `📅 Today: ${analytics.today.total > 0 ? `${analytics.today.score}% (${analytics.today.correct}/${analytics.today.total})` : 'Not yet started'}\n\n`;
+
+    // Exam readiness — the confidence meter (coverage × accuracy across the syllabus)
+    const readiness = Object.values(analytics.readiness || {}).filter(r => r.coverage > 0);
+    if (readiness.length) {
+      msg += `*🎓 Exam readiness:*\n`;
+      for (const r of readiness) {
+        const bar = '▓'.repeat(Math.round(r.score / 10)) + '░'.repeat(10 - Math.round(r.score / 10));
+        msg += `${bar} ${r.score}% — ${r.name}\n`;
+      }
+      msg += `_Readiness grows with both accuracy AND syllabus coverage._\n\n`;
+    }
+
     msg += `*This Week:*\n${weekSummary}\n`;
 
     if (analytics.weakAreas.length > 0) {
-      msg += `\n*Areas to improve:*\n`;
+      msg += `\n*Areas to improve (I'm already drilling you harder on these):*\n`;
       analytics.weakAreas.forEach(a => {
         msg += `• ${SUBJECTS[a.subject]?.name || a.subject}: ${a.topic.replace(/_/g, ' ')} (${a.accuracy}%)\n`;
       });
     }
 
     await this.tg.sendWithKeyboard(chatId, msg, this._mainMenuKeyboard(user));
+  }
+
+  // ─── AI Coach ──────────────────────────────────────
+
+  async _sendCoachNote(chatId, user) {
+    if (!this.coachService) return this.tg.send(chatId, '🧑‍🏫 Coach is not available right now.');
+    await this.tg.send(chatId, '🧑‍🏫 Looking at your progress…');
+
+    const { limited, note } = await this.coachService.onDemandNote(user);
+    if (limited) {
+      return this.tg.send(chatId, '🧑‍🏫 You already had a coach note today — practise some questions and ask me again tomorrow!');
+    }
+    if (!note) {
+      return this.tg.send(chatId, '🧑‍🏫 Answer a few more questions first (at least 5) so I have something to coach you on — then try /coach again.');
+    }
+    await this.tg.send(chatId, `🧑‍🏫 *Coach's note*\n\n${note}`, { parse_mode: 'Markdown' });
+  }
+
+  async _handleCoachCmd(msg) {
+    const user = await this.userService.repo.getUserByTelegram(msg.chat.id);
+    if (!user) return this.tg.send(msg.chat.id, 'Please /start first!');
+    return this._sendCoachNote(msg.chat.id, user);
   }
 
   async _handleStatsCmd(msg) {
@@ -508,7 +545,8 @@ export class TelegramBotAdapter {
       `/drill — Start today's practice\n` +
       `/stats — View your performance\n` +
       `/subscribe — Manage subscription\n` +
-      `/cancel — Stop trial-end auto-billing\n\n` +
+      `/cancel — Stop trial-end auto-billing\n` +
+      `/coach — Personal AI coach note on your progress\n\n` +
       `*Free Trial:* ${TRIAL_DAYS} days. Save a card to continue automatically after — or pay by card/transfer/USSD when it ends.\n` +
       `*Plans:* ₦500/week, ₦1,500/month, or ₦4,000/term.`,
       { parse_mode: 'Markdown', ...(kb ? { reply_markup: { inline_keyboard: kb } } : {}) }
@@ -523,7 +561,7 @@ export class TelegramBotAdapter {
 
     const rows = [
       [{ text: '🎯 Start Today\'s Drill', callback_data: 'menu:drill' }],
-      [{ text: '📊 My Stats', callback_data: 'menu:stats' }],
+      [{ text: '📊 My Stats', callback_data: 'menu:stats' }, { text: '🧑‍🏫 AI Coach', callback_data: 'menu:coach' }],
       [{ text: '💳 Subscribe', callback_data: 'menu:subscribe' }],
     ];
     // Trial users without a saved card get the auto-continue shortcut.

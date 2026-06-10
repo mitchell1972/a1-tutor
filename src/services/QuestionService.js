@@ -1,7 +1,8 @@
 // src/services/QuestionService.js
 // Orchestrates: daily question generation per subject, answer processing, and feedback.
-import { allocatePerSubject, pickWithDifficultyMix, shuffleArray } from '../domain/QuestionAllocator.js';
+import { allocatePerSubject, pickWithDifficultyMix, pickAdaptive, shuffleArray } from '../domain/QuestionAllocator.js';
 import { calculateDailyStats, calculateStreak, identifyWeakAreas } from '../domain/StreakTracker.js';
+import { buildMasteryProfile, topicSelectionWeights, difficultyMixFor } from '../domain/MasteryProfile.js';
 import { DIFFICULTY_MIX, SUBJECTS, QUESTIONS_PER_SUBJECT, formatTopic } from '../config/subjects.js';
 
 export class QuestionService {
@@ -31,18 +32,31 @@ export class QuestionService {
     // Exclude all-time + today (belt and suspenders)
     const excludeIds = [...new Set([...allTimeIds, ...todayIds])];
 
+    // ── Adaptive personalisation: build the student's mastery profile from
+    //    their answer history, weight selection toward weak/unseen topics, and
+    //    tune difficulty to recent form. New users fall back to the defaults.
+    const history = await this.repo.getResponses(user.id, { limit: 2000 });
+    const histMap = await this._questionMap(history);
+    const profile = buildMasteryProfile(history, (id) => histMap.get(id));
+    const recent = history.slice(0, 30); // getResponses returns newest first
+    const recentAccuracy = recent.length
+      ? Math.round((recent.filter(r => r.correct).length / recent.length) * 100)
+      : 0;
+    const mix = difficultyMixFor(recentAccuracy, history.length);
+
     const allocation = allocatePerSubject(subjects, questionsPerSubject);
     const dailySet = [];
     const usedIds = new Set();
 
     for (const { subject, count } of allocation) {
-      // Fetch more than needed so difficulty mix has room to work
-      const pool = await this.repo.getQuestionsBySubject(subject, count * 4, {
+      // Fetch more than needed so topic weighting + difficulty mix have room to work
+      const pool = await this.repo.getQuestionsBySubject(subject, count * 6, {
         excludeIds: [...excludeIds, ...usedIds],
         exam: examType, // JAMB students get JAMB questions, SSCE get SSCE
       });
 
-      const picked = pickWithDifficultyMix(pool, count, DIFFICULTY_MIX);
+      const weights = topicSelectionWeights(profile[subject], SUBJECTS[subject]?.topics || []);
+      const picked = pickAdaptive(pool, count, weights, mix);
       for (const q of picked) {
         dailySet.push(q);
         usedIds.add(q.id);

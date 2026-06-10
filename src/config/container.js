@@ -8,6 +8,7 @@ import { TelegramChannel } from '../infrastructure/messaging/TelegramChannel.js'
 import { WhatsAppChannel } from '../infrastructure/messaging/WhatsAppChannel.js';
 import { CronScheduler } from '../infrastructure/scheduler/CronScheduler.js';
 import { runDailyGeneration } from '../infrastructure/generation/dailyGenerator.js';
+import { DeepSeekClient } from '../infrastructure/ai/DeepSeekClient.js';
 
 import { UserService } from '../services/UserService.js';
 import { QuestionService } from '../services/QuestionService.js';
@@ -15,6 +16,7 @@ import { PaymentService } from '../services/PaymentService.js';
 import { SubscriptionService } from '../services/SubscriptionService.js';
 import { DispatchService } from '../services/DispatchService.js';
 import { AnalyticsService } from '../services/AnalyticsService.js';
+import { CoachService } from '../services/CoachService.js';
 
 import { TelegramBotAdapter } from '../presentation/TelegramBot.js';
 import { WhatsAppBotAdapter } from '../presentation/WhatsAppBotAdapter.js';
@@ -62,6 +64,14 @@ export async function buildContainer(env) {
   const subscriptionService = new SubscriptionService({ repo });
   const analyticsService = new AnalyticsService({ repo });
 
+  // In-app AI (coach notes, misconception spotting). Reuses the DeepSeek creds
+  // already on Railway for nightly generation; degrades gracefully if absent.
+  const ai = new DeepSeekClient({
+    apiKey: env.DEEPSEEK_API_KEY || env.AI_API_KEY,
+    baseUrl: env.DEEPSEEK_BASE_URL || env.AI_BASE_URL,
+    model: env.DEEPSEEK_MODEL || env.AI_MODEL,
+  });
+
   const dispatchService = new DispatchService({
     repo,
     questionService,
@@ -93,6 +103,23 @@ export async function buildContainer(env) {
     console.log('🧠 Daily question generation: ENABLED');
   }
 
+  const coachService = new CoachService({
+    repo, analyticsService, ai,
+    telegram: telegramChannel,
+    whatsapp: whatsappChannel,
+  });
+
+  // Weekly AI coach notes (Sunday 17:00 UTC = 18:00 WAT). On when the AI key
+  // exists; COACH_ENABLED=false switches it off.
+  if (ai.enabled && env.COACH_ENABLED !== 'false') {
+    dailyJobs.push({
+      name: 'weekly-coach-notes',
+      cron: env.COACH_CRON || '0 17 * * 0',
+      fn: () => coachService.runWeekly(),
+    });
+    console.log('🧑‍🏫 Weekly AI coach notes: ENABLED');
+  }
+
   const scheduler = new CronScheduler(
     (hour, minute) => dispatchService.dispatchAt(hour, minute),
     dailyJobs
@@ -108,6 +135,7 @@ export async function buildContainer(env) {
     paymentService,
     dispatchService,
     analyticsService,
+    coachService,
   });
 
   const whatsappBot = new WhatsAppBotAdapter({
@@ -140,6 +168,7 @@ export async function buildContainer(env) {
     subscriptionService,
     dispatchService,
     analyticsService,
+    coachService,
     scheduler,
     telegramBot,
     whatsappBot,

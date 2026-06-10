@@ -40,6 +40,24 @@ export function pickWithDifficultyMix(pool, count, mix = DIFFICULTY_MIX) {
   return shuffleArray(picked).slice(0, count);
 }
 
+/**
+ * Adaptive pick: weight the pool toward the student's weak/unseen topics, then
+ * apply the (possibly personalised) difficulty mix. Falls back gracefully when
+ * no weights are supplied.
+ */
+export function pickAdaptive(pool, count, topicWeights = null, mix = DIFFICULTY_MIX) {
+  if (!topicWeights || pool.length <= count) return pickWithDifficultyMix(pool, count, mix);
+
+  // Score each question by its topic's weight plus jitter so selection isn't
+  // deterministic day-to-day, then keep the heaviest slice as the candidate pool.
+  const scored = pool
+    .map(q => ({ q, score: (topicWeights[q.topic] ?? 1) + Math.random() * 0.35 }))
+    .sort((a, b) => b.score - a.score);
+
+  const candidates = scored.slice(0, Math.max(count * 3, Math.ceil(pool.length * 0.6))).map(s => s.q);
+  return pickWithDifficultyMix(candidates, count, mix);
+}
+
 export function shuffleArray(arr) {
   const a = [...arr];
   for (let i = a.length - 1; i > 0; i--) {

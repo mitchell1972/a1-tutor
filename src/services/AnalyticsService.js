@@ -1,6 +1,7 @@
 // src/services/AnalyticsService.js
 // Orchestrates statistics, reports, and leaderboards.
 import { calculateStreak, calculateDailyStats, identifyWeakAreas } from '../domain/StreakTracker.js';
+import { buildMasteryProfile, readiness } from '../domain/MasteryProfile.js';
 import { SUBJECTS } from '../config/subjects.js';
 
 export class AnalyticsService {
@@ -74,6 +75,14 @@ export class AnalyticsService {
       data.accuracy = data.total ? Math.round((data.correct / data.total) * 100) : 0;
     }
 
+    // Exam-readiness per chosen subject (coverage x accuracy across the syllabus)
+    const profile = buildMasteryProfile(allResponses, getQ);
+    const readinessBySubject = {};
+    for (const sid of (user.subjects || [])) {
+      const topics = SUBJECTS[sid]?.topics || [];
+      readinessBySubject[sid] = { name: SUBJECTS[sid]?.name || sid, ...readiness(profile[sid], topics) };
+    }
+
     return {
       streak,
       today: todayStats,
@@ -81,6 +90,8 @@ export class AnalyticsService {
       trend,
       bySubject,
       weakAreas,
+      readiness: readinessBySubject,
+      profile,
     };
   }
 
