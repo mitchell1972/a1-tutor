@@ -27,9 +27,11 @@ async function main() {
     // 3a. Check for pending ingest (new scraped questions to validate and add)
     try {
       const { default: ingestPending } = await import('../scripts/ingest-pending.js');
-      await ingestPending;
-      questionCount = await container.repo.getTotalQuestions();
-      console.log(`📦 Questions after ingest: ${questionCount}`);
+      const result = await ingestPending();
+      if (result.ingested > 0) {
+        questionCount = await container.repo.getTotalQuestions();
+        console.log(`📦 Questions after ingest: ${questionCount}`);
+      }
     } catch (e) {
       console.warn('⚠️  Pending ingest skipped:', e.message);
     }
