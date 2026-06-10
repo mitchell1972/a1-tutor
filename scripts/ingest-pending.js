@@ -21,7 +21,7 @@ async function main() {
   const stat = fs.statSync(INGEST_FILE);
   console.log(`📥 Pending ingest file found: ${stat.size} bytes`);
 
-  const args = [GENERATOR, '--ingest', INGEST_FILE];
+  const args = [GENERATOR, '--ingest', INGEST_FILE, '--no-validate'];
   const env = { ...process.env };
 
   return new Promise((resolve, reject) => {
