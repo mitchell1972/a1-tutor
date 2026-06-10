@@ -5,3 +5,4 @@ data/*.jsonl
 *.log
 .DS_Store
 .pgurl
+!data/ingest_now.jsonl
