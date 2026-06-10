@@ -8,6 +8,10 @@ export const PLANS = {
   yearly:  { amount: 12000, days: 365, label: '1 Year' },
 };
 
+// One-time charge used to verify + tokenize a card at signup ("save card" flow).
+// Small but real — Flutterwave needs an actual charge to issue a reusable card token.
+export const CARD_SETUP_FEE = 100;
+
 export function getPlan(planId) {
   return PLANS[planId] || null;
 }

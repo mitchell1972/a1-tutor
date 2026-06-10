@@ -29,6 +29,7 @@ export class TelegramBotAdapter {
     this.tg.onText(/\/drill/, this._handleDrillCmd.bind(this));
     this.tg.onText(/\/stats/, this._handleStatsCmd.bind(this));
     this.tg.onText(/\/subscribe/, this._handleSubscribeCmd.bind(this));
+    this.tg.onText(/\/cancel/, this._handleCancelCmd.bind(this));
     this.tg.onCallback(this._handleCallback.bind(this));
   }
 
@@ -99,6 +100,7 @@ export class TelegramBotAdapter {
       else if (data.startsWith('time:'))  await this._onTime(chatId, data.split(':').slice(1), query.message.message_id);
       else if (data.startsWith('menu:'))  await this._onMenu(chatId, data.split(':')[1]);
       else if (data.startsWith('plan:'))  await this._onPlan(chatId, data.split(':')[1]);
+      else if (data.startsWith('autobill:')) await this._onAutobillPlan(chatId, data.split(':')[1]);
       else if (data.startsWith('answer:')) await this._onAnswer(chatId, data, query.message.message_id);
 
     } catch (err) {
@@ -234,11 +236,12 @@ export class TelegramBotAdapter {
       `📖 Subjects: ${subjectNames}\n` +
       `⏰ Delivery: Daily at ${timeStr}\n\n` +
       `🎁 *${TRIAL_DAYS}-Day Free Trial* — ends ${trialEnd.toLocaleDateString('en-GB', { day: 'numeric', month: 'long' })}\n` +
-      `Questions start at your next delivery time!\n\n` +
+      `I'll count down your trial each day. Save a card now and your plan starts automatically when the trial ends (cancel anytime with /cancel) — or just pay later by card, transfer or USSD.\n\n` +
       `Start now with a practice round?`,
       [
         [{ text: '🎯 Start Practice Drill Now', callback_data: 'menu:drill' }],
-        [{ text: '💳 Subscribe (₦500/week)', callback_data: 'menu:subscribe' }],
+        [{ text: '💳 Save card — auto-start after trial', callback_data: 'menu:savecard' }],
+        [{ text: '💰 See plans', callback_data: 'menu:subscribe' }],
       ]
     );
   }
@@ -253,10 +256,77 @@ export class TelegramBotAdapter {
       case 'drill':     return this._startDrill(chatId, user);
       case 'stats':     return this._showStats(chatId, user);
       case 'subscribe': return this._showSubscription(chatId, user);
+      case 'savecard':  return this._showSaveCard(chatId, user);
       case 'help':      return this._showHelp(chatId, user);
       case 'main':
       default:          return this.tg.sendWithKeyboard(chatId, '📋 Main Menu', this._mainMenuKeyboard(user));
     }
+  }
+
+  // ─── Save card (trial-end auto-billing) ─────────────
+
+  async _showSaveCard(chatId, user) {
+    if (user.card_token && user.autobill_status === 'on') {
+      return this.tg.send(chatId,
+        `💳 Card already saved${user.card_last4 ? ` (•••• ${user.card_last4})` : ''} — your ` +
+        `*${user.autobill_plan}* plan starts automatically when your trial ends.\n/cancel to stop it.`,
+        { parse_mode: 'Markdown' });
+    }
+    await this.tg.sendWithKeyboard(chatId,
+      `💳 *Save a card for after your trial*\n\n` +
+      `Pick the plan to start automatically when your free trial ends. ` +
+      `A one-time ₦100 card check applies now; you can /cancel before the trial ends and you won't be charged again.`,
+      [
+        [{ text: '₦500 / Week', callback_data: 'autobill:weekly' }],
+        [{ text: '₦1,500 / Month', callback_data: 'autobill:monthly' }],
+        [{ text: '₦4,000 / 3 Months', callback_data: 'autobill:termly' }],
+        [{ text: '« Back', callback_data: 'menu:main' }],
+      ]
+    );
+  }
+
+  async _onAutobillPlan(chatId, planId) {
+    const user = await this.userService.repo.getUserByTelegram(chatId);
+    if (!user) return;
+
+    try {
+      const { link } = await this.paymentService.createCardSetupLink(user.id, planId);
+      await this.tg.send(chatId,
+        `💳 *Save your card*\n\n` +
+        `Tap below to complete the one-time ₦100 card check. ` +
+        `Your plan then starts automatically when your free trial ends — /cancel anytime before that.`,
+        {
+          parse_mode: 'Markdown',
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: '💳 Save card (₦100 one-time)', url: link }],
+              [{ text: '« Back to plans', callback_data: 'menu:savecard' }],
+            ],
+          },
+        }
+      );
+    } catch (err) {
+      console.error('Card setup link failed:', err);
+      await this.tg.send(chatId, '⚠️ Card service temporarily unavailable. Try again later.');
+    }
+  }
+
+  async _handleCancelCmd(msg) {
+    const user = await this.userService.repo.getUserByTelegram(msg.chat.id);
+    if (!user) return this.tg.send(msg.chat.id, 'Please /start first!');
+
+    if (user.card_token && user.autobill_status === 'on') {
+      await this.paymentService.cancelAutobill(user.id);
+      return this.tg.send(msg.chat.id,
+        `✅ *Auto-billing cancelled.*\n\nYour card will NOT be charged when the trial ends. ` +
+        `Your trial (and any active plan) runs to its end date — after that, /subscribe to continue. ` +
+        `You can re-enable anytime from /start → 💳.`,
+        { parse_mode: 'Markdown' });
+    }
+    return this.tg.send(msg.chat.id,
+      `Nothing to cancel — no auto-billing is set up. ` +
+      `Subscriptions here are pay-as-you-go: when your current access ends, you simply choose whether to pay again. ` +
+      `Check /subscribe for your status.`);
   }
 
   // ─── Drill ─────────────────────────────────────────
@@ -437,9 +507,10 @@ export class TelegramBotAdapter {
       `/start — Register or re-register\n` +
       `/drill — Start today's practice\n` +
       `/stats — View your performance\n` +
-      `/subscribe — Manage subscription\n\n` +
-      `*Free Trial:* ${TRIAL_DAYS} days, no payment needed.\n` +
-      `*After trial:* ₦500/week, ₦1,500/month, or ₦4,000/term.`,
+      `/subscribe — Manage subscription\n` +
+      `/cancel — Stop trial-end auto-billing\n\n` +
+      `*Free Trial:* ${TRIAL_DAYS} days. Save a card to continue automatically after — or pay by card/transfer/USSD when it ends.\n` +
+      `*Plans:* ₦500/week, ₦1,500/month, or ₦4,000/term.`,
       { parse_mode: 'Markdown', ...(kb ? { reply_markup: { inline_keyboard: kb } } : {}) }
     );
   }
@@ -450,13 +521,18 @@ export class TelegramBotAdapter {
     const status = user.subscription_status === 'active' ? '🟢 Active' :
       user.subscription_status === 'trial' ? `🟡 Trial (${TRIAL_DAYS}d free)` : '🔴 Expired';
 
-    return [
+    const rows = [
       [{ text: '🎯 Start Today\'s Drill', callback_data: 'menu:drill' }],
       [{ text: '📊 My Stats', callback_data: 'menu:stats' }],
       [{ text: '💳 Subscribe', callback_data: 'menu:subscribe' }],
-      [{ text: '❓ Help', callback_data: 'menu:help' }],
-      [{ text: `${status} | ${user.subjects?.length || 0} subjects`, callback_data: 'menu:subscribe' }],
     ];
+    // Trial users without a saved card get the auto-continue shortcut.
+    if (user.subscription_status === 'trial' && !(user.card_token && user.autobill_status === 'on')) {
+      rows.push([{ text: '💳 Save card — auto-continue after trial', callback_data: 'menu:savecard' }]);
+    }
+    rows.push([{ text: '❓ Help', callback_data: 'menu:help' }]);
+    rows.push([{ text: `${status} | ${user.subjects?.length || 0} subjects`, callback_data: 'menu:subscribe' }]);
+    return rows;
   }
 
   _timeKeyboard() {

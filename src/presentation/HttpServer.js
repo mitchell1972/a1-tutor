@@ -39,6 +39,8 @@ export class HttpServer {
           await this.dispatchService.notifyPaymentConfirmed(
             result.userId, result.plan, result.endDate
           );
+        } else if (result.action === 'card_saved') {
+          await this.dispatchService.notifyCardSaved(result.userId, result.plan, result.last4);
         }
 
         res.status(200).json({ status: 'ok' });

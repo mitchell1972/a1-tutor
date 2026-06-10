@@ -236,7 +236,7 @@ export const SUBJECT_PRESETS = {
 
 export const DIFFICULTY_MIX = { easy: 0.30, medium: 0.40, hard: 0.30 };
 export const QUESTIONS_PER_SUBJECT = 10;
-export const TRIAL_DAYS = 5;
+export const TRIAL_DAYS = 2;
 
 export function formatTopic(topic) {
   return topic.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());

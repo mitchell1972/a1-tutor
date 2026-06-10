@@ -25,6 +25,11 @@ CREATE TABLE IF NOT EXISTS users (
   updated_at timestamptz DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_users_telegram ON users(telegram_id);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS card_token text;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS card_email text;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS card_last4 text;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS autobill_plan text;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS autobill_status text;
 CREATE INDEX IF NOT EXISTS idx_users_phone ON users(phone);
 CREATE INDEX IF NOT EXISTS idx_users_delivery ON users(delivery_hour, delivery_minute);
 
@@ -148,6 +153,7 @@ export class PgRepository {
     const plainCols = new Set([
       'subscription_status', 'subscription_expiry', 'phone', 'exam_type',
       'delivery_hour', 'delivery_minute', 'channel', 'questions_per_subject',
+      'card_token', 'card_email', 'card_last4', 'autobill_plan', 'autobill_status',
     ]);
     const sets = [];
     const vals = [];

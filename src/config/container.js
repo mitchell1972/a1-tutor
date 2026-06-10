@@ -66,6 +66,7 @@ export async function buildContainer(env) {
     repo,
     questionService,
     subscriptionService,
+    paymentService,
     telegram: telegramChannel,
     whatsapp: whatsappChannel,
     whatsappDailyTemplate: env.WHATSAPP_DAILY_TEMPLATE || null,
