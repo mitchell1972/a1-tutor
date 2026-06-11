@@ -28,24 +28,36 @@ export class TelegramBotAdapter {
 
   // ─── Handler Registration ──────────────────────────
 
+  // Wrap a handler so an exception (e.g. a Markdown parse rejection from the
+  // Telegram API) is logged and surfaced instead of dying as silence.
+  _safe(fn) {
+    return async (msg, match) => {
+      try { await fn(msg, match); }
+      catch (err) {
+        console.error('Handler error:', err.response?.body || err.message);
+        try { await this.tg.send(msg.chat.id, '⚠️ Something went wrong with that command. Please try again.'); } catch { /* give up */ }
+      }
+    };
+  }
+
   _registerHandlers() {
-    this.tg.onText(/\/start/, this._handleStart.bind(this));
-    this.tg.onText(/\/drill/, this._handleDrillCmd.bind(this));
-    this.tg.onText(/\/stats/, this._handleStatsCmd.bind(this));
-    this.tg.onText(/\/subscribe/, this._handleSubscribeCmd.bind(this));
-    this.tg.onText(/\/cancel/, this._handleCancelCmd.bind(this));
-    this.tg.onText(/\/coach/, this._handleCoachCmd.bind(this));
-    this.tg.onText(/\/refs/, this._handleRefsCmd.bind(this));
-    this.tg.onText(/\/affiliate/, this._handleAffiliateCmd.bind(this));
-    this.tg.onText(/\/bank (.+)/, this._handleBankCmd.bind(this));
-    this.tg.onText(/\/payouts(.*)/, this._handlePayoutsCmd.bind(this));
-    this.tg.onText(/\/mock/, this._handleMockCmd.bind(this));
-    this.tg.onText(/\/leaders/, this._handleLeadersCmd.bind(this));
-    this.tg.onText(/\/support(?:\s+([\s\S]+))?/, this._handleSupportCmd.bind(this));
-    this.tg.onText(/\/reply (\S+) ([\s\S]+)/, this._handleReplyCmd.bind(this));
-    this.tg.onText(/\/practice/, this._handlePracticeCmd.bind(this));
-    this.tg.onText(/\/report/, this._handleReportCmd.bind(this));
-    this.tg.onText(/\/broadcast(?:\s+([\s\S]+))?/, this._handleBroadcastCmd.bind(this));
+    this.tg.onText(/\/start/, this._safe(this._handleStart.bind(this)));
+    this.tg.onText(/\/drill/, this._safe(this._handleDrillCmd.bind(this)));
+    this.tg.onText(/\/stats/, this._safe(this._handleStatsCmd.bind(this)));
+    this.tg.onText(/\/subscribe/, this._safe(this._handleSubscribeCmd.bind(this)));
+    this.tg.onText(/\/cancel/, this._safe(this._handleCancelCmd.bind(this)));
+    this.tg.onText(/\/coach/, this._safe(this._handleCoachCmd.bind(this)));
+    this.tg.onText(/\/refs/, this._safe(this._handleRefsCmd.bind(this)));
+    this.tg.onText(/\/affiliate/, this._safe(this._handleAffiliateCmd.bind(this)));
+    this.tg.onText(/\/bank (.+)/, this._safe(this._handleBankCmd.bind(this)));
+    this.tg.onText(/\/payouts(.*)/, this._safe(this._handlePayoutsCmd.bind(this)));
+    this.tg.onText(/\/mock/, this._safe(this._handleMockCmd.bind(this)));
+    this.tg.onText(/\/leaders/, this._safe(this._handleLeadersCmd.bind(this)));
+    this.tg.onText(/\/support(?:\s+([\s\S]+))?/, this._safe(this._handleSupportCmd.bind(this)));
+    this.tg.onText(/\/reply (\S+) ([\s\S]+)/, this._safe(this._handleReplyCmd.bind(this)));
+    this.tg.onText(/\/practice/, this._safe(this._handlePracticeCmd.bind(this)));
+    this.tg.onText(/\/report/, this._safe(this._handleReportCmd.bind(this)));
+    this.tg.onText(/\/broadcast(?:\s+([\s\S]+))?/, this._safe(this._handleBroadcastCmd.bind(this)));
     this.tg.onCallback(this._handleCallback.bind(this));
   }
 
@@ -639,7 +651,7 @@ export class TelegramBotAdapter {
       (focus ? `\n📌 Current focus: ${focus}\n` : '') +
       `━━━━━━━━━━━━━━━━━━\n` +
       `_Daily practice, mock exams & an AI coach on Telegram._\n` +
-      `👉 t.me/A1TutorPrep_bot?start=ref_report`;
+      `👉 \`t.me/A1TutorPrep_bot?start=ref_report\``;
 
     await this.tg.send(chatId, card, { parse_mode: 'Markdown' });
     await this.tg.send(chatId, `📤 Forward the card above to your parent or guardian — it shows your real progress.`);
@@ -656,7 +668,7 @@ export class TelegramBotAdapter {
     await this.tg.send(chatId,
       `🏁 I just scored *${s.jambScore}/${s.jambOutOf}* on a timed ${examLabel} mock on *A1 Tutor*! 💪\n\n` +
       `Daily questions, mock exams and an AI coach — free trial here:\n` +
-      `👉 t.me/A1TutorPrep_bot?start=ref_mockshare\n\n` +
+      `👉 \`t.me/A1TutorPrep_bot?start=ref_mockshare\`\n\n` +
       `Think you can beat my score? 😏`,
       { parse_mode: 'Markdown' });
     await this.tg.send(chatId, `📤 Forward the message above to your friends and class groups!`);
@@ -680,7 +692,10 @@ export class TelegramBotAdapter {
       let sent = 0, failed = 0;
       for (const u of users) {
         try { await this.tg.send(u.telegram_id, `📢 ${pending.text}`, { parse_mode: 'Markdown' }); sent++; }
-        catch { failed++; }
+        catch {
+          try { await this.tg.send(u.telegram_id, `📢 ${pending.text}`); sent++; }  // plain-text fallback
+          catch { failed++; }
+        }
       }
       return this.tg.send(chatId, `📢 Broadcast done: ${sent} delivered, ${failed} failed.`);
     }
@@ -955,7 +970,7 @@ export class TelegramBotAdapter {
     let total = 0;
     for (const r of rows) {
       total += r.pending;
-      out += `*${r.name || r.tag}* (\`${r.id}\`)\n`;
+      out += `\`${r.name || r.tag}\` (\`${r.id}\`)\n`;
       out += `  ₦${r.pending.toLocaleString()} → ${r.bank_name || '⚠️ no bank'} ${r.account_number || ''} ${r.account_name || ''}\n`;
     }
     out += `\n*Total: ₦${total.toLocaleString()}*\n\nAfter transferring, settle with: /payouts paid <id>`;
@@ -981,10 +996,10 @@ export class TelegramBotAdapter {
 
     let out = `📈 *Signups by source*\n\n`;
     for (const r of rows) {
-      out += `*${r.source}* — ${r.signups} signup${r.signups !== 1 ? 's' : ''}`;
+      out += `\`${r.source}\` — ${r.signups} signup${r.signups !== 1 ? 's' : ''}`;
       out += `  (🟢 ${r.paying} paying · 🟡 ${r.on_trial} trial · 🔴 ${r.expired} expired)\n`;
     }
-    out += `\n_Tag your ads with t.me/A1TutorPrep\\_bot?start=ref\\_CHANNEL to track them here._`;
+    out += `\nTag your ads with \`t.me/A1TutorPrep_bot?start=ref_CHANNEL\` to track them here.`;
     await this.tg.send(chatId, out, { parse_mode: 'Markdown' });
   }
 
