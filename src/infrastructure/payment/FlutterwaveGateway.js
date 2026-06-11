@@ -30,7 +30,7 @@ export class FlutterwaveGateway {
       payment_options: 'card,account,ussd,banktransfer,qr',
       redirect_url: this.redirectUrl,
       customer: {
-        email: email || `${phone}@exambot.ng`,
+        email: email || `${(phone || userId || 'student').toString().replace(/[^a-zA-Z0-9]/g, '')}@students.a1tutor.ng`,
         phonenumber: phone,
         name: name || 'Student',
       },
@@ -63,7 +63,7 @@ export class FlutterwaveGateway {
       payment_options: 'card', // tokenization needs a card — no transfer/USSD here
       redirect_url: this.redirectUrl,
       customer: {
-        email: email || `${phone}@exambot.ng`,
+        email: email || `${(phone || userId || 'student').toString().replace(/[^a-zA-Z0-9]/g, '')}@students.a1tutor.ng`,
         phonenumber: phone,
         name: name || 'Student',
       },
