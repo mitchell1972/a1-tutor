@@ -17,6 +17,7 @@ import { SubscriptionService } from '../services/SubscriptionService.js';
 import { DispatchService } from '../services/DispatchService.js';
 import { AnalyticsService } from '../services/AnalyticsService.js';
 import { CoachService } from '../services/CoachService.js';
+import { MockService } from '../services/MockService.js';
 
 import { TelegramBotAdapter } from '../presentation/TelegramBot.js';
 import { WhatsAppBotAdapter } from '../presentation/WhatsAppBotAdapter.js';
@@ -103,6 +104,8 @@ export async function buildContainer(env) {
     console.log('🧠 Daily question generation: ENABLED');
   }
 
+  const mockService = new MockService({ repo, questionService });
+
   const coachService = new CoachService({
     repo, analyticsService, ai,
     telegram: telegramChannel,
@@ -136,6 +139,7 @@ export async function buildContainer(env) {
     dispatchService,
     analyticsService,
     coachService,
+    mockService,
     adminChatId: env.ADMIN_TELEGRAM_ID || null,
   });
 
@@ -170,6 +174,7 @@ export async function buildContainer(env) {
     dispatchService,
     analyticsService,
     coachService,
+    mockService,
     scheduler,
     telegramBot,
     whatsappBot,

@@ -5,7 +5,7 @@ import { SUBJECTS, SUBJECT_PRESETS, EXAM_TYPES, QUESTIONS_PER_SUBJECT, TRIAL_DAY
 import { PLANS, getPlan, AFFILIATE_PERCENT } from '../config/plans.js';
 
 export class TelegramBotAdapter {
-  constructor({ channel, userService, questionService, subscriptionService, paymentService, dispatchService, analyticsService, coachService, adminChatId }) {
+  constructor({ channel, userService, questionService, subscriptionService, paymentService, dispatchService, analyticsService, coachService, mockService, adminChatId }) {
     this.tg = channel;
     this.adminChatId = adminChatId ? String(adminChatId) : null;
     this.userService = userService;
@@ -15,6 +15,7 @@ export class TelegramBotAdapter {
     this.dispatchService = dispatchService;
     this.analyticsService = analyticsService;
     this.coachService = coachService;
+    this.mockService = mockService;
 
     this._registerHandlers();
   }
@@ -38,6 +39,10 @@ export class TelegramBotAdapter {
     this.tg.onText(/\/affiliate/, this._handleAffiliateCmd.bind(this));
     this.tg.onText(/\/bank (.+)/, this._handleBankCmd.bind(this));
     this.tg.onText(/\/payouts(.*)/, this._handlePayoutsCmd.bind(this));
+    this.tg.onText(/\/mock/, this._handleMockCmd.bind(this));
+    this.tg.onText(/\/leaders/, this._handleLeadersCmd.bind(this));
+    this.tg.onText(/\/support(?:\s+([\s\S]+))?/, this._handleSupportCmd.bind(this));
+    this.tg.onText(/\/reply (\S+) ([\s\S]+)/, this._handleReplyCmd.bind(this));
     this.tg.onCallback(this._handleCallback.bind(this));
   }
 
@@ -114,6 +119,10 @@ export class TelegramBotAdapter {
       else if (data.startsWith('autobill:')) await this._onAutobillPlan(chatId, data.split(':')[1]);
       else if (data === 'aff:join') await this._onAffiliateJoin(chatId);
       else if (data === 'aff:menu') await this._handleAffiliateCmd({ chat: { id: chatId } });
+      else if (data.startsWith('mockans:')) await this._onMockAnswer(chatId, data, query.message.message_id);
+      else if (data === 'mock:start') await this._handleMockCmd({ chat: { id: chatId } });
+      else if (data === 'mock:fix') await this._onMockCorrections(chatId);
+      else if (data === 'menu:leaders') await this._handleLeadersCmd({ chat: { id: chatId } });
       else if (data.startsWith('answer:')) await this._onAnswer(chatId, data, query.message.message_id);
 
     } catch (err) {
@@ -488,6 +497,158 @@ export class TelegramBotAdapter {
     await this.tg.send(chatId, `🧑‍🏫 *Coach's note*\n\n${note}`, { parse_mode: 'Markdown' });
   }
 
+  // ─── Mock exam (real CBT conditions) ───────────────
+
+  async _handleMockCmd(msg) {
+    const chatId = msg.chat.id;
+    const user = await this.userService.repo.getUserByTelegram(chatId);
+    if (!user) return this.tg.send(chatId, 'Please /start first!');
+
+    const access = await this.subscriptionService.getStatus(user.id);
+    if (!access.valid) {
+      return this.tg.sendWithKeyboard(chatId, '🔒 Mock exams need an active trial or subscription:', this._plansKeyboard(user.id));
+    }
+
+    // Resume a mock in progress rather than restarting it.
+    const active = await this.mockService.getActive(user.id);
+    if (active) {
+      const cur = await this.mockService.currentQuestion(user.id);
+      if (cur?.question) {
+        const left = this.mockService.secondsLeft(cur.session);
+        await this.tg.send(chatId, `🏁 Mock in progress — ${Math.floor(left / 60)}m ${left % 60}s left. Continuing:`, {});
+        return this._sendMockQuestion(chatId, cur.question, cur.index, cur.total);
+      }
+    }
+
+    const started = await this.mockService.start(user);
+    if (!started) return this.tg.send(chatId, '⚠️ Not enough fresh questions for a mock right now. Try again tomorrow.');
+
+    await this.tg.send(chatId,
+      `🏁 *MOCK EXAM — real exam conditions*\n\n` +
+      `📝 ${started.total} questions across your subjects\n` +
+      `⏱ ${started.limitMin} minutes (JAMB pace)\n` +
+      `🚫 No answers shown until the end — just like the real hall\n\n` +
+      `Your score (out of ${(user.subjects?.length || 1) * 100}) and full corrections come at the end. Good luck! 🍀`,
+      { parse_mode: 'Markdown' });
+
+    const cur = await this.mockService.currentQuestion(user.id);
+    return this._sendMockQuestion(chatId, cur.question, cur.index, cur.total);
+  }
+
+  async _sendMockQuestion(chatId, q, index, total) {
+    const subject = SUBJECTS[q.subject] || {};
+    const opts = typeof q.options === 'string' ? JSON.parse(q.options) : (q.options || {});
+    await this.tg.sendWithKeyboard(chatId,
+      `*Mock ${index + 1}/${total} | ${subject.icon || '📝'} ${subject.name || q.subject}*\n\n${q.text}`,
+      Object.entries(opts).map(([k, v]) => ([{
+        text: `${k}) ${String(v).length > 40 ? String(v).slice(0, 37) + '...' : v}`,
+        callback_data: `mockans:${q.id}:${k}`,
+      }]))
+    );
+  }
+
+  async _onMockAnswer(chatId, data, messageId) {
+    const [, questionId, chosen] = data.split(':');
+    const user = await this.userService.repo.getUserByTelegram(chatId);
+    if (!user) return;
+
+    const r = await this.mockService.answer(user, questionId, chosen);
+    if (r.error === 'no_mock') return this.tg.send(chatId, 'No mock in progress — start one with /mock.');
+    if (r.error === 'stale') return;
+
+    if (messageId) { try { await this.tg.editKeyboard(chatId, messageId, []); } catch { /* old */ } }
+
+    if (!r.finished) {
+      // Gentle clock nudges at sensible intervals, never per-question spam.
+      if ((r.index) % 10 === 0) {
+        await this.tg.send(chatId, `⏱ ${Math.floor(r.secondsLeft / 60)}m ${r.secondsLeft % 60}s left — keep going!`);
+      }
+      return this._sendMockQuestion(chatId, r.next, r.index, r.total);
+    }
+
+    const rep = r.report;
+    let out = rep.timedOut ? `⏰ *TIME UP!*\n\n` : `🏁 *MOCK COMPLETE!*\n\n`;
+    out += `🎯 *Score: ${rep.jambScore} / ${rep.jambOutOf}*\n`;
+    out += `✅ ${rep.correct}/${rep.total} correct (${rep.pct}%)${rep.answered < rep.total ? ` — ${rep.total - rep.answered} unanswered` : ''}\n`;
+    out += `⚡ Pace: ${rep.paceSec}s per question (JAMB allows ~40s)\n\n`;
+    out += `*By subject:*\n`;
+    for (const s of rep.subjects) out += `• ${s.name}: ${s.correct}/${s.total} (${s.pct}%)\n`;
+    out += `\n_Mock results feed your readiness score and tomorrow's drill targets your gaps._`;
+
+    const kb = [];
+    if (rep.wrongCount > 0) kb.push([{ text: `📖 Show corrections (${Math.min(rep.wrongCount, 10)})`, callback_data: 'mock:fix' }]);
+    kb.push([{ text: '🏁 Another mock', callback_data: 'mock:start' }, { text: '📊 My Stats', callback_data: 'menu:stats' }]);
+    await this.tg.sendWithKeyboard(chatId, out, kb);
+  }
+
+  async _onMockCorrections(chatId) {
+    const user = await this.userService.repo.getUserByTelegram(chatId);
+    if (!user) return;
+    const items = await this.mockService.corrections(user.id);
+    if (!items.length) return this.tg.send(chatId, 'Nothing to correct — clean sheet! 🌟');
+
+    let out = `📖 *Your corrections — learn these and the marks are yours:*\n`;
+    for (const [i, c] of items.entries()) {
+      out += `\n*${i + 1}. ${c.topic}*\n${c.text.slice(0, 150)}${c.text.length > 150 ? '…' : ''}\n` +
+             `✓ *${c.answer}) ${c.answerText}*\n💡 ${c.explanation}\n`;
+      if (out.length > 3200) { await this.tg.send(chatId, out, { parse_mode: 'Markdown' }); out = ''; }
+    }
+    if (out) await this.tg.send(chatId, out, { parse_mode: 'Markdown' });
+  }
+
+  // ─── Leaderboard ───────────────────────────────────
+
+  async _handleLeadersCmd(msg) {
+    const chatId = msg.chat.id;
+    const [streaks, accuracy] = await Promise.all([
+      this.analyticsService.getLeaderboard('streak', 5),
+      this.analyticsService.getLeaderboard('accuracy', 5),
+    ]);
+    const medal = (i) => ['🥇', '🥈', '🥉', '4.', '5.'][i] || `${i + 1}.`;
+    const anon = (r) => r.name !== 'Scholar' ? r.name : `Scholar ${String(r.userId).slice(-4)}`;
+
+    let out = `🏆 *Leaderboard*\n\n🔥 *Longest streaks:*\n`;
+    out += streaks.length ? streaks.map((r, i) => `${medal(i)} ${anon(r)} — ${r.score} days`).join('\n') : '_No streaks yet — be the first!_';
+    out += `\n\n🎯 *Best accuracy (last 7 days, 10+ answers):*\n`;
+    out += accuracy.length ? accuracy.map((r, i) => `${medal(i)} ${anon(r)} — ${r.score}%`).join('\n') : '_No qualifiers yet — answer 10+ this week!_';
+    await this.tg.send(chatId, out, { parse_mode: 'Markdown' });
+  }
+
+  // ─── Human support (the thing nobody offers here) ──
+
+  async _handleSupportCmd(msg, match) {
+    const chatId = msg.chat.id;
+    const text = (match?.[1] || '').trim();
+    if (!text) {
+      return this.tg.send(chatId,
+        `📨 *Talk to a human*\n\nType your question after the command, e.g.:\n` +
+        `\`/support My payment went through but my plan is not active\`\n\n` +
+        `A real person replies — usually within a few hours.`,
+        { parse_mode: 'Markdown' });
+    }
+    if (this.adminChatId) {
+      const user = await this.userService.repo.getUserByTelegram(chatId);
+      await this.tg.send(this.adminChatId,
+        `📨 *Support request*\nFrom: \`${chatId}\`${user ? ` (${user.id}, ${user.subscription_status})` : ''}\n\n${text}\n\nReply with:\n\`/reply ${chatId} your answer\``,
+        { parse_mode: 'Markdown' });
+    } else {
+      console.warn(`SUPPORT REQUEST (no ADMIN_TELEGRAM_ID set) from ${chatId}: ${text}`);
+    }
+    await this.tg.send(chatId, `✅ Got it — a real person will reply here soon. (We answer fastest 8am–10pm WAT.)`);
+  }
+
+  async _handleReplyCmd(msg, match) {
+    const chatId = msg.chat.id;
+    if (!this.adminChatId || String(chatId) !== this.adminChatId) return;
+    const [, target, text] = match;
+    try {
+      await this.tg.send(target, `💬 *Support reply:*\n\n${text}`, { parse_mode: 'Markdown' });
+      await this.tg.send(chatId, `✅ Sent to ${target}.`);
+    } catch (err) {
+      await this.tg.send(chatId, `⚠️ Could not deliver to ${target}: ${err.message}`);
+    }
+  }
+
   // ─── Affiliate programme ───────────────────────────
 
   async _handleAffiliateCmd(msg) {
@@ -701,7 +862,10 @@ export class TelegramBotAdapter {
       `/subscribe — Manage subscription\n` +
       `/cancel — Stop trial-end auto-billing\n` +
       `/coach — Personal AI coach note on your progress\n` +
-      `/affiliate — Earn ${AFFILIATE_PERCENT}% sharing A1 Tutor\n\n` +
+      `/affiliate — Earn ${AFFILIATE_PERCENT}% sharing A1 Tutor\n` +
+      `/mock — Timed mock exam, real CBT conditions\n` +
+      `/leaders — This week's top scholars\n` +
+      `/support <message> — Talk to a real human\n\n` +
       `*Free Trial:* ${TRIAL_DAYS} days. Save a card to continue automatically after — or pay by card/transfer/USSD when it ends.\n` +
       `*Plans:* ₦${PLANS.weekly.amount}/week, ₦${PLANS.monthly.amount.toLocaleString()}/month, or ₦${PLANS.termly.amount.toLocaleString()} for the Exam Season Pass.`,
       { parse_mode: 'Markdown', ...(kb ? { reply_markup: { inline_keyboard: kb } } : {}) }
@@ -716,6 +880,7 @@ export class TelegramBotAdapter {
 
     const rows = [
       [{ text: '🎯 Start Today\'s Drill', callback_data: 'menu:drill' }],
+      [{ text: '🏁 Mock Exam', callback_data: 'mock:start' }, { text: '🏆 Leaderboard', callback_data: 'menu:leaders' }],
       [{ text: '📊 My Stats', callback_data: 'menu:stats' }, { text: '🧑‍🏫 AI Coach', callback_data: 'menu:coach' }],
       [{ text: '💳 Subscribe', callback_data: 'menu:subscribe' }],
     ];
