@@ -2,6 +2,7 @@
 // Flutterwave API adapter — collects NGN from Nigerian students, settles in GBP to UK account.
 import axios from 'axios';
 import crypto from 'node:crypto';
+import { getPlan } from '../../config/plans.js';
 
 export class FlutterwaveGateway {
   constructor({ secretKey, publicKey, webhookSecret, redirectUrl }) {
@@ -20,12 +21,11 @@ export class FlutterwaveGateway {
    * Create a payment link for a student to complete their subscription.
    */
   async createPaymentLink({ userId, email, phone, plan, name }) {
-    const planAmounts = { weekly: 500, monthly: 1500, termly: 4000, yearly: 12000 };
-    const planLabels = { weekly: '1 Week Subscription', monthly: '1 Month Subscription', termly: '3 Month Subscription', yearly: '1 Year Subscription' };
+    const p = getPlan(plan);
 
     const payload = {
       tx_ref: `exambot-${userId}-${plan}-${Date.now()}`,
-      amount: planAmounts[plan] || 500,
+      amount: p?.amount || 500,
       currency: 'NGN',
       payment_options: 'card,account,ussd,banktransfer,qr',
       redirect_url: this.redirectUrl,
@@ -35,8 +35,8 @@ export class FlutterwaveGateway {
         name: name || 'Student',
       },
       customizations: {
-        title: 'ExamPrep Bot',
-        description: planLabels[plan] || 'Subscription',
+        title: 'A1 Tutor',
+        description: p ? `${p.label} Subscription` : 'Subscription',
       },
       meta: { user_id: userId, plan },
     };

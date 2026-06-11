@@ -64,6 +64,33 @@ CREATE TABLE IF NOT EXISTS dispatches (
 );
 CREATE INDEX IF NOT EXISTS idx_dispatches_user_time ON dispatches(user_id, dispatched_at);
 
+CREATE TABLE IF NOT EXISTS affiliates (
+  id text PRIMARY KEY,
+  user_id text,                 -- bot user who owns this affiliate account
+  name text,
+  tag text UNIQUE,              -- the ?start= payload that attributes signups
+  percent int DEFAULT 20,       -- revenue share frozen at join time
+  bank_name text, account_number text, account_name text,
+  status text DEFAULT 'active',
+  created_at timestamptz DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_affiliates_tag ON affiliates(tag);
+CREATE INDEX IF NOT EXISTS idx_affiliates_user ON affiliates(user_id);
+
+CREATE TABLE IF NOT EXISTS commissions (
+  id text PRIMARY KEY,
+  affiliate_id text,
+  user_id text,                 -- the referred student who paid
+  tx_ref text,
+  plan text,
+  amount_paid numeric,
+  commission numeric,
+  status text DEFAULT 'pending',  -- pending | paid
+  created_at timestamptz DEFAULT now(),
+  paid_at timestamptz
+);
+CREATE INDEX IF NOT EXISTS idx_commissions_affiliate ON commissions(affiliate_id, status);
+
 CREATE TABLE IF NOT EXISTS sessions (
   key text PRIMARY KEY,
   data jsonb DEFAULT '{}'::jsonb,
@@ -71,7 +98,7 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 `;
 
-const TABLES = new Set(['users', 'questions', 'responses', 'subscriptions', 'dispatches']);
+const TABLES = new Set(['users', 'questions', 'responses', 'subscriptions', 'dispatches', 'affiliates', 'commissions']);
 
 export class PgRepository {
   constructor(connectionString) {
@@ -328,9 +355,11 @@ export class PgRepository {
   }
 
   async getTotalRevenue() {
-    const plans = { weekly: 500, monthly: 1500, termly: 4000, yearly: 12000 };
-    const { rows } = await this.pool.query("SELECT plan FROM subscriptions WHERE status = 'active'");
-    return rows.reduce((sum, s) => sum + (plans[s.plan] || 0), 0);
+    // Sum what was actually paid — survives price changes over time.
+    const { rows } = await this.pool.query(
+      "SELECT COALESCE(SUM(amount), 0)::numeric AS total FROM subscriptions WHERE status = 'active'"
+    );
+    return Number(rows[0].total);
   }
 
   // ─── Dispatches ────────────────────────────────────
@@ -355,6 +384,86 @@ export class PgRepository {
       'SELECT question_ids FROM dispatches WHERE user_id = $1', [userId]
     );
     return rows.flatMap(d => d.question_ids || []);
+  }
+
+  // ─── Affiliates & commissions ──────────────────────
+
+  async createAffiliate({ user_id, name, tag, percent }) {
+    const id = genId('aff');
+    const { rows } = await this.pool.query(
+      `INSERT INTO affiliates (id, user_id, name, tag, percent, status, created_at)
+       VALUES ($1,$2,$3,$4,$5,'active', now()) RETURNING *`,
+      [id, user_id ?? null, name ?? null, tag, percent ?? 20]
+    );
+    return rows[0];
+  }
+
+  async getAffiliateByUser(userId) {
+    const { rows } = await this.pool.query('SELECT * FROM affiliates WHERE user_id = $1', [userId]);
+    return rows[0] || null;
+  }
+
+  async getAffiliateByTag(tag) {
+    const { rows } = await this.pool.query("SELECT * FROM affiliates WHERE tag = $1 AND status = 'active'", [tag]);
+    return rows[0] || null;
+  }
+
+  async updateAffiliateBank(id, { bank_name, account_number, account_name }) {
+    const { rows } = await this.pool.query(
+      'UPDATE affiliates SET bank_name = $1, account_number = $2, account_name = $3 WHERE id = $4 RETURNING *',
+      [bank_name, account_number, account_name, id]
+    );
+    return rows[0] || null;
+  }
+
+  async createCommission({ affiliate_id, user_id, tx_ref, plan, amount_paid, commission }) {
+    const id = genId('com');
+    const { rows } = await this.pool.query(
+      `INSERT INTO commissions (id, affiliate_id, user_id, tx_ref, plan, amount_paid, commission, status, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,'pending', now()) RETURNING *`,
+      [id, affiliate_id, user_id, tx_ref ?? null, plan ?? null, amount_paid, commission]
+    );
+    return rows[0];
+  }
+
+  // One affiliate's headline numbers: referred signups, how many pay, earnings.
+  async getAffiliateEarnings(affiliateId, tag) {
+    const { rows: u } = await this.pool.query(
+      `SELECT count(*)::int AS referred,
+              count(*) FILTER (WHERE subscription_status = 'active')::int AS paying
+       FROM users WHERE ref_source = $1`, [tag]
+    );
+    const { rows: c } = await this.pool.query(
+      `SELECT COALESCE(SUM(commission), 0)::numeric AS earned,
+              COALESCE(SUM(commission) FILTER (WHERE status = 'pending'), 0)::numeric AS pending
+       FROM commissions WHERE affiliate_id = $1`, [affiliateId]
+    );
+    return {
+      referred: u[0].referred,
+      paying: u[0].paying,
+      earned: Number(c[0].earned),
+      pending: Number(c[0].pending),
+    };
+  }
+
+  // Admin payout view: every affiliate with pending commission, plus bank details.
+  async getPendingPayouts() {
+    const { rows } = await this.pool.query(
+      `SELECT a.id, a.name, a.tag, a.bank_name, a.account_number, a.account_name,
+              COALESCE(SUM(c.commission), 0)::numeric AS pending
+       FROM affiliates a
+       JOIN commissions c ON c.affiliate_id = a.id AND c.status = 'pending'
+       GROUP BY a.id ORDER BY pending DESC`
+    );
+    return rows.map(r => ({ ...r, pending: Number(r.pending) }));
+  }
+
+  async markCommissionsPaid(affiliateId) {
+    const { rowCount } = await this.pool.query(
+      "UPDATE commissions SET status = 'paid', paid_at = now() WHERE affiliate_id = $1 AND status = 'pending'",
+      [affiliateId]
+    );
+    return rowCount;
   }
 
   // ─── Sessions (registration state, shared across instances) ──

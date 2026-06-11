@@ -3,7 +3,7 @@
 // This is the scheduler's entry point into the application layer.
 import { checkAccess } from '../domain/SubscriptionValidator.js';
 import { TRIAL_DAYS } from '../config/subjects.js';
-import { getPlan } from '../config/plans.js';
+import { getPlan, PLANS } from '../config/plans.js';
 
 export class DispatchService {
   constructor({ repo, questionService, subscriptionService, paymentService, telegram, whatsapp, whatsappDailyTemplate, whatsappTemplateLang }) {
@@ -135,7 +135,7 @@ export class DispatchService {
       ? `⚠️ *Your trial ended and we couldn't charge your saved card.*\n\n`
       : `⏰ *Your ${TRIAL_DAYS}-day free trial has ended!*\n\n`) +
       `Subscribe to continue receiving daily JAMB/SSCE questions:\n` +
-      `• ₦500/week\n• ₦1,500/month\n• ₦4,000/3 months\n\n` +
+      `• ₦${PLANS.weekly.amount}/week\n• ₦${PLANS.monthly.amount.toLocaleString()}/month\n• ₦${PLANS.termly.amount.toLocaleString()} Exam Season Pass (3 months)\n\n` +
       `Pay by card, bank transfer or USSD — type /subscribe to keep learning! 📚`;
 
     if (user.telegram_id) {

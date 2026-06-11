@@ -149,7 +149,37 @@ export class PaymentService {
       subscription_expiry: new Date(endDate).toISOString(),
     });
 
+    // Affiliate revenue share: if this student was referred by an active
+    // affiliate, log their cut of THIS payment (recurring — every payment the
+    // student ever makes earns the affiliate their percentage).
+    await this._recordCommission(userId, plan, txRef, amount).catch(err =>
+      console.warn(`PaymentService: commission logging failed for ${txRef}: ${err.message}`));
+
     return { userId, plan, endDate };
+  }
+
+  async _recordCommission(userId, plan, txRef, amount) {
+    if (typeof this.repo.getAffiliateByTag !== 'function') return;   // jsonl dev backend
+    const user = await this.repo.getUser(userId);
+    if (!user?.ref_source) return;
+
+    const affiliate = await this.repo.getAffiliateByTag(user.ref_source);
+    if (!affiliate) return;                                          // organic / owner campaign tag
+    if (affiliate.user_id && affiliate.user_id === userId) return;   // no self-referral
+
+    const paid = Number(amount) || 0;
+    if (paid <= 0) return;
+    const commission = Math.round(paid * (affiliate.percent / 100));
+
+    await this.repo.createCommission({
+      affiliate_id: affiliate.id,
+      user_id: userId,
+      tx_ref: txRef,
+      plan,
+      amount_paid: paid,
+      commission,
+    });
+    console.log(`🤝 Commission: ₦${commission} to ${affiliate.tag} (${affiliate.percent}% of ₦${paid})`);
   }
 
   /**

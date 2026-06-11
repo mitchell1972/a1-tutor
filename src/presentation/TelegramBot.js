@@ -2,6 +2,7 @@
 // Presentation adapter: handles Telegram I/O. Delegates ALL business logic to services.
 // Thin, testable, replaceable.
 import { SUBJECTS, SUBJECT_PRESETS, EXAM_TYPES, QUESTIONS_PER_SUBJECT, TRIAL_DAYS } from '../config/subjects.js';
+import { PLANS, getPlan, AFFILIATE_PERCENT } from '../config/plans.js';
 
 export class TelegramBotAdapter {
   constructor({ channel, userService, questionService, subscriptionService, paymentService, dispatchService, analyticsService, coachService, adminChatId }) {
@@ -34,6 +35,9 @@ export class TelegramBotAdapter {
     this.tg.onText(/\/cancel/, this._handleCancelCmd.bind(this));
     this.tg.onText(/\/coach/, this._handleCoachCmd.bind(this));
     this.tg.onText(/\/refs/, this._handleRefsCmd.bind(this));
+    this.tg.onText(/\/affiliate/, this._handleAffiliateCmd.bind(this));
+    this.tg.onText(/\/bank (.+)/, this._handleBankCmd.bind(this));
+    this.tg.onText(/\/payouts(.*)/, this._handlePayoutsCmd.bind(this));
     this.tg.onCallback(this._handleCallback.bind(this));
   }
 
@@ -108,6 +112,8 @@ export class TelegramBotAdapter {
       else if (data.startsWith('menu:'))  await this._onMenu(chatId, data.split(':')[1]);
       else if (data.startsWith('plan:'))  await this._onPlan(chatId, data.split(':')[1]);
       else if (data.startsWith('autobill:')) await this._onAutobillPlan(chatId, data.split(':')[1]);
+      else if (data === 'aff:join') await this._onAffiliateJoin(chatId);
+      else if (data === 'aff:menu') await this._handleAffiliateCmd({ chat: { id: chatId } });
       else if (data.startsWith('answer:')) await this._onAnswer(chatId, data, query.message.message_id);
 
     } catch (err) {
@@ -286,9 +292,8 @@ export class TelegramBotAdapter {
       `Pick the plan to start automatically when your free trial ends. ` +
       `A one-time ₦100 card check applies now; you can /cancel before the trial ends and you won't be charged again.`,
       [
-        [{ text: '₦500 / Week', callback_data: 'autobill:weekly' }],
-        [{ text: '₦1,500 / Month', callback_data: 'autobill:monthly' }],
-        [{ text: '₦4,000 / 3 Months', callback_data: 'autobill:termly' }],
+        ...['weekly', 'monthly', 'termly'].map(id =>
+          [{ text: `₦${PLANS[id].amount.toLocaleString()} — ${PLANS[id].label}`, callback_data: `autobill:${id}` }]),
         [{ text: '« Back', callback_data: 'menu:main' }],
       ]
     );
@@ -483,6 +488,123 @@ export class TelegramBotAdapter {
     await this.tg.send(chatId, `🧑‍🏫 *Coach's note*\n\n${note}`, { parse_mode: 'Markdown' });
   }
 
+  // ─── Affiliate programme ───────────────────────────
+
+  async _handleAffiliateCmd(msg) {
+    const chatId = msg.chat.id;
+    const user = await this.userService.repo.getUserByTelegram(chatId);
+    if (!user) return this.tg.send(chatId, 'Please /start first!');
+    if (typeof this.userService.repo.getAffiliateByUser !== 'function') {
+      return this.tg.send(chatId, 'Affiliate programme not available right now.');
+    }
+
+    const aff = await this.userService.repo.getAffiliateByUser(user.id);
+    if (!aff) {
+      return this.tg.sendWithKeyboard(chatId,
+        `🤝 *Earn with A1 Tutor*\n\n` +
+        `Share your personal link and earn *${AFFILIATE_PERCENT}% of every payment* your students make — ` +
+        `not once, but *every time they renew, for life*.\n\n` +
+        `Example: refer 20 students on the ₦${PLANS.monthly.amount.toLocaleString()}/month plan and earn ` +
+        `₦${(20 * Math.round(PLANS.monthly.amount * AFFILIATE_PERCENT / 100)).toLocaleString()} *every month* they stay subscribed.\n\n` +
+        `Payouts monthly to your Nigerian bank account (₦5,000 minimum).`,
+        [[{ text: '✅ Join the programme', callback_data: 'aff:join' }],
+         [{ text: '« Back', callback_data: 'menu:main' }]]
+      );
+    }
+
+    const e = await this.userService.repo.getAffiliateEarnings(aff.id, aff.tag);
+    const bank = aff.account_number
+      ? `${aff.bank_name} ••${String(aff.account_number).slice(-4)} (${aff.account_name})`
+      : '⚠️ not set — send: /bank BankName AccountNumber Account Name';
+    await this.tg.send(chatId,
+      `🤝 *Your affiliate dashboard*\n\n` +
+      `🔗 Your link:\n\`https://t.me/A1TutorPrep_bot?start=${aff.tag}\`\n\n` +
+      `👥 Students referred: ${e.referred}\n` +
+      `🟢 Currently paying: ${e.paying}\n` +
+      `💰 Lifetime earned: ₦${e.earned.toLocaleString()}\n` +
+      `⏳ Pending payout: ₦${e.pending.toLocaleString()}\n` +
+      `🏦 Bank: ${bank}\n\n` +
+      `You earn ${aff.percent}% of every payment your students make, forever. Share your link anywhere — channels, groups, status.`,
+      { parse_mode: 'Markdown' });
+  }
+
+  async _onAffiliateJoin(chatId) {
+    const user = await this.userService.repo.getUserByTelegram(chatId);
+    if (!user) return;
+    const existing = await this.userService.repo.getAffiliateByUser(user.id);
+    if (existing) return this._handleAffiliateCmd({ chat: { id: chatId } });
+
+    // Short unique tag; retry on the (unlikely) collision.
+    let aff = null;
+    for (let i = 0; i < 5 && !aff; i++) {
+      const tag = 'p_' + Math.random().toString(36).slice(2, 8);
+      if (await this.userService.repo.getAffiliateByTag(tag)) continue;
+      aff = await this.userService.repo.createAffiliate({
+        user_id: user.id, name: user.name || null, tag, percent: AFFILIATE_PERCENT,
+      });
+    }
+    if (!aff) return this.tg.send(chatId, '⚠️ Could not create your affiliate account. Try again.');
+
+    await this.tg.send(chatId,
+      `🎉 *You're in!*\n\n` +
+      `🔗 Your personal link:\n\`https://t.me/A1TutorPrep_bot?start=${aff.tag}\`\n\n` +
+      `Share it in channels, class groups, WhatsApp status — anywhere students are. ` +
+      `Every student who joins through it is yours: you earn *${aff.percent}% of every payment they ever make*.\n\n` +
+      `🏦 To receive payouts, add your bank details:\n\`/bank BankName AccountNumber Account Name\`\n` +
+      `e.g. \`/bank Opay 8012345678 Chidi Okafor\`\n\n` +
+      `Track everything anytime with /affiliate.`,
+      { parse_mode: 'Markdown' });
+  }
+
+  async _handleBankCmd(msg, match) {
+    const chatId = msg.chat.id;
+    const user = await this.userService.repo.getUserByTelegram(chatId);
+    if (!user) return this.tg.send(chatId, 'Please /start first!');
+    const aff = await this.userService.repo.getAffiliateByUser(user.id);
+    if (!aff) return this.tg.send(chatId, 'Join the programme first: /affiliate');
+
+    const parts = String(match?.[1] || '').trim().split(/\s+/);
+    const accIdx = parts.findIndex(x => /^\d{10}$/.test(x));
+    if (accIdx === -1 || parts.length < 3) {
+      return this.tg.send(chatId,
+        'Format: /bank BankName AccountNumber Account Name\ne.g. /bank GTBank 0123456789 Chidi Okafor\n(account number must be 10 digits)');
+    }
+    const bank_name = parts.slice(0, accIdx).join(' ');
+    const account_number = parts[accIdx];
+    const account_name = parts.slice(accIdx + 1).join(' ');
+    if (!bank_name || !account_name) {
+      return this.tg.send(chatId, 'Format: /bank BankName AccountNumber Account Name');
+    }
+
+    await this.userService.repo.updateAffiliateBank(aff.id, { bank_name, account_number, account_name });
+    await this.tg.send(chatId,
+      `🏦 Bank saved: ${bank_name} ••${account_number.slice(-4)} (${account_name}).\nPayouts go out monthly once you reach ₦5,000 pending.`);
+  }
+
+  // Admin: pending payouts list, and "/payouts paid <affiliateId>" to settle one.
+  async _handlePayoutsCmd(msg, match) {
+    const chatId = msg.chat.id;
+    if (!this.adminChatId || String(chatId) !== this.adminChatId) return; // silent for non-admins
+
+    const args = String(match?.[1] || '').trim().split(/\s+/).filter(Boolean);
+    if (args[0] === 'paid' && args[1]) {
+      const n = await this.userService.repo.markCommissionsPaid(args[1]);
+      return this.tg.send(chatId, `✅ Marked ${n} commission record(s) as paid for ${args[1]}.`);
+    }
+
+    const rows = await this.userService.repo.getPendingPayouts();
+    if (!rows.length) return this.tg.send(chatId, 'No pending payouts. 🎉');
+    let out = `💸 *Pending payouts*\n\n`;
+    let total = 0;
+    for (const r of rows) {
+      total += r.pending;
+      out += `*${r.name || r.tag}* (\`${r.id}\`)\n`;
+      out += `  ₦${r.pending.toLocaleString()} → ${r.bank_name || '⚠️ no bank'} ${r.account_number || ''} ${r.account_name || ''}\n`;
+    }
+    out += `\n*Total: ₦${total.toLocaleString()}*\n\nAfter transferring, settle with: /payouts paid <id>`;
+    await this.tg.send(chatId, out, { parse_mode: 'Markdown' });
+  }
+
   // ─── /refs — campaign tracking report (admin only) ──
 
   async _handleRefsCmd(msg) {
@@ -538,22 +660,22 @@ export class TelegramBotAdapter {
     const user = await this.userService.repo.getUserByTelegram(chatId);
     if (!user) return;
 
-    const planAmounts = { weekly: 500, monthly: 1500, termly: 4000, yearly: 12000 };
-    const planLabels = { weekly: '1 Week', monthly: '1 Month', termly: '3 Months', yearly: '1 Year' };
+    const plan = getPlan(planId);
+    if (!plan) return;
 
     try {
       const { link } = await this.paymentService.createPaymentLink(user.id, planId);
 
       await this.tg.send(chatId,
         `💳 *Complete Your Payment*\n\n` +
-        `Plan: ${planLabels[planId]}\n` +
-        `Amount: ₦${planAmounts[planId].toLocaleString()}\n\n` +
+        `Plan: ${plan.label}\n` +
+        `Amount: ₦${plan.amount.toLocaleString()}\n\n` +
         `Click below to pay securely via Flutterwave:`,
         {
           parse_mode: 'Markdown',
           reply_markup: {
             inline_keyboard: [
-              [{ text: `💳 Pay ₦${planAmounts[planId].toLocaleString()}`, url: link }],
+              [{ text: `💳 Pay ₦${plan.amount.toLocaleString()}`, url: link }],
               [{ text: '« Back to Plans', callback_data: 'menu:subscribe' }],
             ],
           },
@@ -578,9 +700,10 @@ export class TelegramBotAdapter {
       `/stats — View your performance\n` +
       `/subscribe — Manage subscription\n` +
       `/cancel — Stop trial-end auto-billing\n` +
-      `/coach — Personal AI coach note on your progress\n\n` +
+      `/coach — Personal AI coach note on your progress\n` +
+      `/affiliate — Earn ${AFFILIATE_PERCENT}% sharing A1 Tutor\n\n` +
       `*Free Trial:* ${TRIAL_DAYS} days. Save a card to continue automatically after — or pay by card/transfer/USSD when it ends.\n` +
-      `*Plans:* ₦500/week, ₦1,500/month, or ₦4,000/term.`,
+      `*Plans:* ₦${PLANS.weekly.amount}/week, ₦${PLANS.monthly.amount.toLocaleString()}/month, or ₦${PLANS.termly.amount.toLocaleString()} for the Exam Season Pass.`,
       { parse_mode: 'Markdown', ...(kb ? { reply_markup: { inline_keyboard: kb } } : {}) }
     );
   }
@@ -600,6 +723,7 @@ export class TelegramBotAdapter {
     if (user.subscription_status === 'trial' && !(user.card_token && user.autobill_status === 'on')) {
       rows.push([{ text: '💳 Save card — auto-continue after trial', callback_data: 'menu:savecard' }]);
     }
+    rows.push([{ text: '🤝 Earn with us', callback_data: 'aff:menu' }]);
     rows.push([{ text: '❓ Help', callback_data: 'menu:help' }]);
     rows.push([{ text: `${status} | ${user.subjects?.length || 0} subjects`, callback_data: 'menu:subscribe' }]);
     return rows;
@@ -630,12 +754,9 @@ export class TelegramBotAdapter {
   }
 
   _plansKeyboard(userId) {
-    return [
-      [{ text: '₦500 / Week', callback_data: 'plan:weekly' }],
-      [{ text: '₦1,500 / Month', callback_data: 'plan:monthly' }],
-      [{ text: '₦4,000 / 3 Months', callback_data: 'plan:termly' }],
-      [{ text: '₦12,000 / Year', callback_data: 'plan:yearly' }],
-      [{ text: '« Back', callback_data: 'menu:main' }],
-    ];
+    const rows = Object.entries(PLANS).map(([id, p]) =>
+      [{ text: `₦${p.amount.toLocaleString()} — ${p.label}`, callback_data: `plan:${id}` }]);
+    rows.push([{ text: '« Back', callback_data: 'menu:main' }]);
+    return rows;
   }
 }

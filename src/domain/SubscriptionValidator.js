@@ -3,6 +3,7 @@
 // Zero dependencies.
 
 import { TRIAL_DAYS } from '../config/subjects.js';
+import { getPlan } from '../config/plans.js';
 
 /**
  * Check if a user has valid access (trial or paid).
@@ -43,8 +44,7 @@ export function checkAccess(user, activeSubscription) {
  * Calculate subscription end date from a plan.
  */
 export function calculateEndDate(planId) {
-  const plans = { weekly: 7, monthly: 30, termly: 90, yearly: 365 };
-  const days = plans[planId] || 30;
+  const days = getPlan(planId)?.days || 30;
   const end = new Date();
   end.setDate(end.getDate() + days);
   return end.toISOString().split('T')[0];
