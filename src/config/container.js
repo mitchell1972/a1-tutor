@@ -136,6 +136,7 @@ export async function buildContainer(env) {
     dispatchService,
     analyticsService,
     coachService,
+    adminChatId: env.ADMIN_TELEGRAM_ID || null,
   });
 
   const whatsappBot = new WhatsAppBotAdapter({

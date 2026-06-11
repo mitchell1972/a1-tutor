@@ -4,8 +4,9 @@
 import { SUBJECTS, SUBJECT_PRESETS, EXAM_TYPES, QUESTIONS_PER_SUBJECT, TRIAL_DAYS } from '../config/subjects.js';
 
 export class TelegramBotAdapter {
-  constructor({ channel, userService, questionService, subscriptionService, paymentService, dispatchService, analyticsService, coachService }) {
+  constructor({ channel, userService, questionService, subscriptionService, paymentService, dispatchService, analyticsService, coachService, adminChatId }) {
     this.tg = channel;
+    this.adminChatId = adminChatId ? String(adminChatId) : null;
     this.userService = userService;
     this.questionService = questionService;
     this.subscriptionService = subscriptionService;
@@ -32,6 +33,7 @@ export class TelegramBotAdapter {
     this.tg.onText(/\/subscribe/, this._handleSubscribeCmd.bind(this));
     this.tg.onText(/\/cancel/, this._handleCancelCmd.bind(this));
     this.tg.onText(/\/coach/, this._handleCoachCmd.bind(this));
+    this.tg.onText(/\/refs/, this._handleRefsCmd.bind(this));
     this.tg.onCallback(this._handleCallback.bind(this));
   }
 
@@ -39,6 +41,9 @@ export class TelegramBotAdapter {
 
   async _handleStart(msg) {
     const chatId = msg.chat.id;
+    // Deep-link payload ("/start ref_jambpast" from t.me/Bot?start=ref_jambpast) —
+    // the campaign tag for ad tracking. Sanitised; first touch wins at registration.
+    const refPayload = (String(msg.text || '').match(/^\/start\s+([A-Za-z0-9_-]{1,32})/) || [])[1] || null;
     const result = await this.userService.startRegistration(chatId);
 
     if (result.isReturning) {
@@ -68,7 +73,7 @@ export class TelegramBotAdapter {
     }
 
     // New user
-    await this._setSession(chatId, { step: 'exam_type', telegramId: chatId });
+    await this._setSession(chatId, { step: 'exam_type', telegramId: chatId, ref: refPayload });
 
     await this.tg.sendWithKeyboard(chatId,
       `🎓 *Welcome to ExamPrep Bot!*\n\n` +
@@ -222,6 +227,7 @@ export class TelegramBotAdapter {
       deliveryHour: session.delivery_hour,
       deliveryMinute: session.delivery_minute,
       channel: 'telegram',
+      refSource: session.ref || null,
     });
 
     await this._clearSession(chatId);
@@ -475,6 +481,32 @@ export class TelegramBotAdapter {
       return this.tg.send(chatId, '🧑‍🏫 Answer a few more questions first (at least 5) so I have something to coach you on — then try /coach again.');
     }
     await this.tg.send(chatId, `🧑‍🏫 *Coach's note*\n\n${note}`, { parse_mode: 'Markdown' });
+  }
+
+  // ─── /refs — campaign tracking report (admin only) ──
+
+  async _handleRefsCmd(msg) {
+    const chatId = msg.chat.id;
+    if (!this.adminChatId || String(chatId) !== this.adminChatId) {
+      // Echo the requester's chat id so the owner can configure ADMIN_TELEGRAM_ID.
+      return this.tg.send(chatId,
+        `This report is for the bot owner.\n(Your chat id is \`${chatId}\` — if you ARE the owner, set ADMIN_TELEGRAM_ID to this value.)`,
+        { parse_mode: 'Markdown' });
+    }
+
+    if (typeof this.userService.repo.getRefStats !== 'function') {
+      return this.tg.send(chatId, 'Ref stats not available on this storage backend.');
+    }
+    const rows = await this.userService.repo.getRefStats();
+    if (!rows.length) return this.tg.send(chatId, 'No signups yet.');
+
+    let out = `📈 *Signups by source*\n\n`;
+    for (const r of rows) {
+      out += `*${r.source}* — ${r.signups} signup${r.signups !== 1 ? 's' : ''}`;
+      out += `  (🟢 ${r.paying} paying · 🟡 ${r.on_trial} trial · 🔴 ${r.expired} expired)\n`;
+    }
+    out += `\n_Tag your ads with t.me/A1TutorPrep\\_bot?start=ref\\_CHANNEL to track them here._`;
+    await this.tg.send(chatId, out, { parse_mode: 'Markdown' });
   }
 
   async _handleCoachCmd(msg) {

@@ -30,6 +30,7 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS card_email text;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS card_last4 text;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS autobill_plan text;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS autobill_status text;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS ref_source text;
 CREATE INDEX IF NOT EXISTS idx_users_phone ON users(phone);
 CREATE INDEX IF NOT EXISTS idx_users_delivery ON users(delivery_hour, delivery_minute);
 
@@ -131,8 +132,8 @@ export class PgRepository {
     const { rows } = await this.pool.query(
       `INSERT INTO users
          (id, telegram_id, phone, exam_type, subjects, delivery_hour, delivery_minute,
-          channel, questions_per_subject, subscription_status, trial_start, created_at, updated_at)
-       VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,'trial', now(), now(), now())
+          channel, questions_per_subject, ref_source, subscription_status, trial_start, created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10,'trial', now(), now(), now())
        RETURNING *`,
       [
         id,
@@ -144,6 +145,7 @@ export class PgRepository {
         data.delivery_minute ?? 0,
         data.channel ?? 'telegram',
         data.questions_per_subject ?? 10,
+        data.ref_source ?? null,
       ]
     );
     return rows[0];
@@ -168,6 +170,19 @@ export class PgRepository {
       `UPDATE users SET ${sets.join(', ')} WHERE id = $${i} RETURNING *`, vals
     );
     return rows[0] || null;
+  }
+
+  // Signups + conversion per referral source (campaign tracking for channel ads).
+  async getRefStats() {
+    const { rows } = await this.pool.query(
+      `SELECT COALESCE(ref_source, '(organic)') AS source,
+              count(*)::int AS signups,
+              count(*) FILTER (WHERE subscription_status = 'active')::int AS paying,
+              count(*) FILTER (WHERE subscription_status = 'trial')::int  AS on_trial,
+              count(*) FILTER (WHERE subscription_status = 'expired')::int AS expired
+       FROM users GROUP BY 1 ORDER BY signups DESC`
+    );
+    return rows;
   }
 
   async getUsersDueForDelivery(hour, minute) {

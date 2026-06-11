@@ -22,7 +22,7 @@ export class UserService {
     };
   }
 
-  async registerUser({ telegramId, phone, examType, subjects, deliveryHour, deliveryMinute, channel }) {
+  async registerUser({ telegramId, phone, examType, subjects, deliveryHour, deliveryMinute, channel, refSource }) {
     // Validate
     if (!EXAM_TYPES[examType?.toUpperCase()]) throw new Error(`Invalid exam type: ${examType}`);
     if (!subjects || subjects.length < 2) throw new Error('Minimum 2 subjects required');
@@ -47,6 +47,7 @@ export class UserService {
     };
     if (telegramId) data.telegram_id = telegramId;
     if (phone) data.phone = normalizePhone(phone);
+    if (refSource) data.ref_source = refSource;
 
     return await this.repo.createUser(data);
   }
