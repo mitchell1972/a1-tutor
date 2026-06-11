@@ -79,6 +79,25 @@ export class QuestionService {
   }
 
   /**
+   * Self-directed topic practice: n fresh questions on ONE topic (repeats allowed
+   * only when the student has exhausted the fresh pool). Feeds the same response
+   * log as drills, so practice sharpens the mastery profile too.
+   */
+  async getTopicQuestions(user, subjectId, topicId, n = 5) {
+    const pool = (await this.repo.getQuestionsBySubject(subjectId, n * 20, {
+      exam: user.exam_type || null,
+    })).filter(q => q.topic === topicId);
+    if (!pool.length) return [];
+
+    const answered = new Set(
+      (await this.repo.getResponses(user.id, { limit: 5000 })).map(r => r.question_id)
+    );
+    const fresh = pool.filter(q => !answered.has(q.id));
+    const source = fresh.length >= Math.min(n, 3) ? fresh : pool;
+    return pickWithDifficultyMix(source, Math.min(n, source.length));
+  }
+
+  /**
    * Check if user has already been dispatched questions today.
    */
   async isAlreadyDispatchedToday(userId) {

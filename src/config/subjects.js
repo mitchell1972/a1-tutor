@@ -234,6 +234,25 @@ export const SUBJECT_PRESETS = {
   uni_science:    { label: '🔬 Pure Sciences (200L)',   subjects: ['organic_chemistry','calculus','genetics'] },
 };
 
+// Provisional exam-season start dates (update when JAMB/WAEC publish official
+// timetables). daysToExam() rolls to the next year automatically once passed.
+export const EXAM_TARGET_DATES = {
+  jamb: '04-20',       // UTME usually starts late April
+  ssce: '05-03',       // WAEC May/June series
+  neco: '06-21',       // NECO June/July series
+  post_utme: '08-01',
+};
+
+export function daysToExam(examId, now = new Date()) {
+  const md = EXAM_TARGET_DATES[examId];
+  if (!md) return null;
+  const [m, d] = md.split('-').map(Number);
+  let target = new Date(Date.UTC(now.getUTCFullYear(), m - 1, d));
+  if (target < now) target = new Date(Date.UTC(now.getUTCFullYear() + 1, m - 1, d));
+  const days = Math.ceil((target - now) / (1000 * 60 * 60 * 24));
+  return { days, year: target.getUTCFullYear() };
+}
+
 export const DIFFICULTY_MIX = { easy: 0.30, medium: 0.40, hard: 0.30 };
 export const QUESTIONS_PER_SUBJECT = 10;
 export const TRIAL_DAYS = 2;

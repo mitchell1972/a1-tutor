@@ -1,7 +1,7 @@
 // src/presentation/TelegramBot.js
 // Presentation adapter: handles Telegram I/O. Delegates ALL business logic to services.
 // Thin, testable, replaceable.
-import { SUBJECTS, SUBJECT_PRESETS, EXAM_TYPES, QUESTIONS_PER_SUBJECT, TRIAL_DAYS } from '../config/subjects.js';
+import { SUBJECTS, SUBJECT_PRESETS, EXAM_TYPES, QUESTIONS_PER_SUBJECT, TRIAL_DAYS, formatTopic, daysToExam } from '../config/subjects.js';
 import { PLANS, getPlan, AFFILIATE_PERCENT } from '../config/plans.js';
 
 export class TelegramBotAdapter {
@@ -43,6 +43,9 @@ export class TelegramBotAdapter {
     this.tg.onText(/\/leaders/, this._handleLeadersCmd.bind(this));
     this.tg.onText(/\/support(?:\s+([\s\S]+))?/, this._handleSupportCmd.bind(this));
     this.tg.onText(/\/reply (\S+) ([\s\S]+)/, this._handleReplyCmd.bind(this));
+    this.tg.onText(/\/practice/, this._handlePracticeCmd.bind(this));
+    this.tg.onText(/\/report/, this._handleReportCmd.bind(this));
+    this.tg.onText(/\/broadcast(?:\s+([\s\S]+))?/, this._handleBroadcastCmd.bind(this));
     this.tg.onCallback(this._handleCallback.bind(this));
   }
 
@@ -123,6 +126,12 @@ export class TelegramBotAdapter {
       else if (data === 'mock:start') await this._handleMockCmd({ chat: { id: chatId } });
       else if (data === 'mock:fix') await this._onMockCorrections(chatId);
       else if (data === 'menu:leaders') await this._handleLeadersCmd({ chat: { id: chatId } });
+      else if (data === 'mock:share') await this._onMockShare(chatId);
+      else if (data === 'menu:practice') await this._handlePracticeCmd({ chat: { id: chatId } });
+      else if (data === 'menu:report') await this._handleReportCmd({ chat: { id: chatId } });
+      else if (data.startsWith('pracsub:')) await this._onPracticeSubject(chatId, data.split(':')[1]);
+      else if (data.startsWith('practopic:')) await this._onPracticeTopic(chatId, data.split(':')[1], data.split(':')[2]);
+      else if (data.startsWith('pracans:')) await this._onPracticeAnswer(chatId, data, query.message.message_id);
       else if (data.startsWith('answer:')) await this._onAnswer(chatId, data, query.message.message_id);
 
     } catch (err) {
@@ -478,7 +487,10 @@ export class TelegramBotAdapter {
       });
     }
 
-    await this.tg.sendWithKeyboard(chatId, msg, this._mainMenuKeyboard(user));
+    await this.tg.sendWithKeyboard(chatId, msg, [
+      [{ text: '📤 Parent report', callback_data: 'menu:report' }],
+      ...this._mainMenuKeyboard(user),
+    ]);
   }
 
   // ─── AI Coach ──────────────────────────────────────
@@ -495,6 +507,189 @@ export class TelegramBotAdapter {
       return this.tg.send(chatId, '🧑‍🏫 Answer a few more questions first (at least 5) so I have something to coach you on — then try /coach again.');
     }
     await this.tg.send(chatId, `🧑‍🏫 *Coach's note*\n\n${note}`, { parse_mode: 'Markdown' });
+  }
+
+  // ─── Topic practice (self-directed drilling) ───────
+
+  async _handlePracticeCmd(msg) {
+    const chatId = msg.chat.id;
+    const user = await this.userService.repo.getUserByTelegram(chatId);
+    if (!user) return this.tg.send(chatId, 'Please /start first!');
+
+    const access = await this.subscriptionService.getStatus(user.id);
+    if (!access.valid) {
+      return this.tg.sendWithKeyboard(chatId, '🔒 Topic practice needs an active trial or subscription:', this._plansKeyboard(user.id));
+    }
+
+    const subjects = (user.subjects || []).filter(sid => SUBJECTS[sid]);
+    if (!subjects.length) return this.tg.send(chatId, 'No subjects on your profile — /start to set up.');
+    if (subjects.length === 1) return this._onPracticeSubject(chatId, subjects[0]);
+
+    const rows = [];
+    for (let i = 0; i < subjects.length; i += 2) {
+      rows.push(subjects.slice(i, i + 2).map(sid =>
+        ({ text: `${SUBJECTS[sid].icon} ${SUBJECTS[sid].name}`, callback_data: `pracsub:${sid}` })));
+    }
+    await this.tg.sendWithKeyboard(chatId, `🎯 *Topic practice* — which subject?`, rows);
+  }
+
+  async _onPracticeSubject(chatId, subjectId) {
+    const subject = SUBJECTS[subjectId];
+    if (!subject) return;
+    const rows = [];
+    for (let i = 0; i < subject.topics.length; i += 2) {
+      rows.push(subject.topics.slice(i, i + 2).map(t =>
+        ({ text: formatTopic(t), callback_data: `practopic:${subjectId}:${t}` })));
+    }
+    await this.tg.sendWithKeyboard(chatId, `${subject.icon} *${subject.name}* — pick the topic to drill:`, rows);
+  }
+
+  async _onPracticeTopic(chatId, subjectId, topicId) {
+    const user = await this.userService.repo.getUserByTelegram(chatId);
+    if (!user) return;
+
+    const questions = await this.questionService.getTopicQuestions(user, subjectId, topicId, 5);
+    if (!questions.length) {
+      return this.tg.send(chatId, `No questions on ${formatTopic(topicId)} yet — the bank grows every night, try tomorrow!`);
+    }
+
+    await this.userService.repo.setSession(`prac:${chatId}`, {
+      ids: questions.map(q => q.id), idx: 0, correct: 0, subjectId, topicId,
+    });
+    await this.tg.send(chatId,
+      `🎯 *${formatTopic(topicId)}* — ${questions.length} questions, instant feedback. Let's go!`,
+      { parse_mode: 'Markdown' });
+    return this._sendPracticeQuestion(chatId, questions[0], 0, questions.length);
+  }
+
+  async _sendPracticeQuestion(chatId, q, index, total) {
+    const opts = typeof q.options === 'string' ? JSON.parse(q.options) : (q.options || {});
+    await this.tg.sendWithKeyboard(chatId,
+      `*Practice ${index + 1}/${total} | ${formatTopic(q.topic)}*\n\n${q.text}`,
+      Object.entries(opts).map(([k, v]) => ([{
+        text: `${k}) ${String(v).length > 40 ? String(v).slice(0, 37) + '...' : v}`,
+        callback_data: `pracans:${q.id}:${k}`,
+      }]))
+    );
+  }
+
+  async _onPracticeAnswer(chatId, data, messageId) {
+    const [, questionId, chosen] = data.split(':');
+    const user = await this.userService.repo.getUserByTelegram(chatId);
+    if (!user) return;
+
+    const sKey = `prac:${chatId}`;
+    const sess = await this.userService.repo.getSession(sKey);
+    if (!sess?.ids || sess.ids[sess.idx] !== questionId) return;   // stale tap
+
+    if (messageId) { try { await this.tg.editKeyboard(chatId, messageId, []); } catch { /* old */ } }
+
+    const result = await this.questionService.processAnswer(user.id, questionId, chosen);
+    if (result.correct) sess.correct++;
+    sess.idx++;
+    await this.tg.send(chatId, this.questionService.formatFeedback(result), { parse_mode: 'Markdown' });
+
+    if (sess.idx >= sess.ids.length) {
+      await this.userService.repo.deleteSession(sKey);
+      const pct = Math.round((sess.correct / sess.ids.length) * 100);
+      const verdict = pct >= 80 ? 'Mastering it! 🌟' : pct >= 60 ? 'Good — a few more rounds and it\'s yours. 👍' : 'Tough topic — let\'s keep chipping at it. 💪';
+      return this.tg.sendWithKeyboard(chatId,
+        `🎯 *${formatTopic(sess.topicId)}: ${sess.correct}/${sess.ids.length} (${pct}%)*\n${verdict}`,
+        [
+          [{ text: '🔁 5 more on this topic', callback_data: `practopic:${sess.subjectId}:${sess.topicId}` }],
+          [{ text: '🎯 Another topic', callback_data: 'menu:practice' }, { text: '📋 Menu', callback_data: 'menu:main' }],
+        ]);
+    }
+
+    await this.userService.repo.setSession(sKey, sess);
+    const next = await this.userService.repo.getQuestion(sess.ids[sess.idx]);
+    await this.tg.sleep(400);
+    return this._sendPracticeQuestion(chatId, next, sess.idx, sess.ids.length);
+  }
+
+  // ─── Parent report (shareable progress card) ───────
+
+  async _handleReportCmd(msg) {
+    const chatId = msg.chat.id;
+    const user = await this.userService.repo.getUserByTelegram(chatId);
+    if (!user) return this.tg.send(chatId, 'Please /start first!');
+
+    const a = await this.analyticsService.getUserAnalytics(user.id);
+    if (!a || a.overall.totalAnswered < 5) {
+      return this.tg.send(chatId, 'Answer a few questions first — then your report will have something to show!');
+    }
+
+    const t = daysToExam(user.exam_type);
+    const examLabel = EXAM_TYPES[user.exam_type?.toUpperCase()]?.label || '';
+    const bars = Object.values(a.readiness || {}).filter(r => r.coverage > 0)
+      .map(r => {
+        const bar = '▓'.repeat(Math.round(r.score / 10)) + '░'.repeat(10 - Math.round(r.score / 10));
+        return `${bar} ${r.score}% ${r.name}`;
+      }).join('\n');
+    const focus = (a.weakAreas || []).slice(0, 2)
+      .map(w => `${formatTopic(w.topic)} (${SUBJECTS[w.subject]?.name || w.subject})`).join(', ');
+
+    const card =
+      `🎓 *A1 TUTOR — PROGRESS REPORT*\n` +
+      `━━━━━━━━━━━━━━━━━━\n` +
+      `📚 Exam: ${examLabel}${t ? ` — ${t.days} days away` : ''}\n` +
+      `🔥 Streak: ${a.streak} day${a.streak !== 1 ? 's' : ''}\n` +
+      `🎯 Accuracy: ${a.overall.accuracy}% over ${a.overall.totalAnswered} questions\n` +
+      (bars ? `\n*Exam readiness:*\n${bars}\n` : '') +
+      (focus ? `\n📌 Current focus: ${focus}\n` : '') +
+      `━━━━━━━━━━━━━━━━━━\n` +
+      `_Daily practice, mock exams & an AI coach on Telegram._\n` +
+      `👉 t.me/A1TutorPrep_bot?start=ref_report`;
+
+    await this.tg.send(chatId, card, { parse_mode: 'Markdown' });
+    await this.tg.send(chatId, `📤 Forward the card above to your parent or guardian — it shows your real progress.`);
+  }
+
+  // Forward-ready brag card after a mock — every good score becomes an advert.
+  async _onMockShare(chatId) {
+    const user = await this.userService.repo.getUserByTelegram(chatId);
+    if (!user) return;
+    const s = await this.userService.repo.getSession(`mockfix:${user.id}`);
+    if (!s?.jambOutOf) return this.tg.send(chatId, 'Finish a mock first — then share your score!');
+
+    const examLabel = EXAM_TYPES[user.exam_type?.toUpperCase()]?.label || 'exam';
+    await this.tg.send(chatId,
+      `🏁 I just scored *${s.jambScore}/${s.jambOutOf}* on a timed ${examLabel} mock on *A1 Tutor*! 💪\n\n` +
+      `Daily questions, mock exams and an AI coach — free trial here:\n` +
+      `👉 t.me/A1TutorPrep_bot?start=ref_mockshare\n\n` +
+      `Think you can beat my score? 😏`,
+      { parse_mode: 'Markdown' });
+    await this.tg.send(chatId, `📤 Forward the message above to your friends and class groups!`);
+  }
+
+  // ─── /broadcast — admin announcement to all students ──
+
+  async _handleBroadcastCmd(msg, match) {
+    const chatId = msg.chat.id;
+    if (!this.adminChatId || String(chatId) !== this.adminChatId) return; // silent for non-admins
+
+    const text = (match?.[1] || '').trim();
+    const key = `broadcast:${chatId}`;
+
+    if (text === 'confirm') {
+      const pending = await this.userService.repo.getSession(key);
+      if (!pending?.text) return this.tg.send(chatId, 'Nothing staged. Use /broadcast <message> first.');
+      await this.userService.repo.deleteSession(key);
+
+      const users = (await this.userService.repo.all('users')).filter(u => u.telegram_id);
+      let sent = 0, failed = 0;
+      for (const u of users) {
+        try { await this.tg.send(u.telegram_id, `📢 ${pending.text}`, { parse_mode: 'Markdown' }); sent++; }
+        catch { failed++; }
+      }
+      return this.tg.send(chatId, `📢 Broadcast done: ${sent} delivered, ${failed} failed.`);
+    }
+
+    if (!text) return this.tg.send(chatId, 'Usage: /broadcast <message>, then /broadcast confirm to send.');
+    await this.userService.repo.setSession(key, { text });
+    return this.tg.send(chatId,
+      `📢 *Preview:*\n\n📢 ${text}\n\nSend to ALL students with: /broadcast confirm`,
+      { parse_mode: 'Markdown' });
   }
 
   // ─── Mock exam (real CBT conditions) ───────────────
@@ -577,6 +772,7 @@ export class TelegramBotAdapter {
 
     const kb = [];
     if (rep.wrongCount > 0) kb.push([{ text: `📖 Show corrections (${Math.min(rep.wrongCount, 10)})`, callback_data: 'mock:fix' }]);
+    kb.push([{ text: '📤 Share my score', callback_data: 'mock:share' }]);
     kb.push([{ text: '🏁 Another mock', callback_data: 'mock:start' }, { text: '📊 My Stats', callback_data: 'menu:stats' }]);
     await this.tg.sendWithKeyboard(chatId, out, kb);
   }
@@ -864,6 +1060,8 @@ export class TelegramBotAdapter {
       `/coach — Personal AI coach note on your progress\n` +
       `/affiliate — Earn ${AFFILIATE_PERCENT}% sharing A1 Tutor\n` +
       `/mock — Timed mock exam, real CBT conditions\n` +
+      `/practice — Drill any topic you choose, 5 at a time\n` +
+      `/report — Progress card to share with your parent\n` +
       `/leaders — This week's top scholars\n` +
       `/support <message> — Talk to a real human\n\n` +
       `*Free Trial:* ${TRIAL_DAYS} days. Save a card to continue automatically after — or pay by card/transfer/USSD when it ends.\n` +
@@ -880,7 +1078,8 @@ export class TelegramBotAdapter {
 
     const rows = [
       [{ text: '🎯 Start Today\'s Drill', callback_data: 'menu:drill' }],
-      [{ text: '🏁 Mock Exam', callback_data: 'mock:start' }, { text: '🏆 Leaderboard', callback_data: 'menu:leaders' }],
+      [{ text: '🏁 Mock Exam', callback_data: 'mock:start' }, { text: '🎯 Topic Practice', callback_data: 'menu:practice' }],
+      [{ text: '🏆 Leaderboard', callback_data: 'menu:leaders' }, { text: '📤 Parent report', callback_data: 'menu:report' }],
       [{ text: '📊 My Stats', callback_data: 'menu:stats' }, { text: '🧑‍🏫 AI Coach', callback_data: 'menu:coach' }],
       [{ text: '💳 Subscribe', callback_data: 'menu:subscribe' }],
     ];

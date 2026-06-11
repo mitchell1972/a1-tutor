@@ -2,7 +2,7 @@
 // Orchestrates daily question dispatch across channels.
 // This is the scheduler's entry point into the application layer.
 import { checkAccess } from '../domain/SubscriptionValidator.js';
-import { TRIAL_DAYS } from '../config/subjects.js';
+import { TRIAL_DAYS, EXAM_TYPES, daysToExam } from '../config/subjects.js';
 import { getPlan, PLANS } from '../config/plans.js';
 
 export class DispatchService {
@@ -102,13 +102,24 @@ export class DispatchService {
     return `\n${left}${tail}\n`;
   }
 
+  // "📅 218 days to JAMB 2027" — daily urgency, sharper as the exam nears.
+  _examCountdownLine(user) {
+    const t = daysToExam(user.exam_type);
+    if (!t) return '';
+    const label = EXAM_TYPES[user.exam_type?.toUpperCase()]?.label || user.exam_type?.toUpperCase();
+    const push = t.days <= 30 ? ' — FINAL PUSH! 💪' : t.days <= 90 ? ' — it\'s getting close!' : ' — every day counts.';
+    return `📅 *${t.days} days* to ${label} ${t.year}${push}\n`;
+  }
+
   async _dispatchTelegram(user, questions, access = null) {
     const total = questions.length;
     const subjectCount = user.subjects?.length || 1;
     const perSubject = Math.round(questions.length / Math.max(subjectCount, 1));
 
     await this.telegram.send(user.telegram_id,
-      `🌅 *Good Morning!*\n📚 ${total} questions today (${perSubject} per subject across ${subjectCount} subject${subjectCount > 1 ? 's' : ''}). Answer each to get the next. Good luck! 🚀\n` +
+      `🌅 *Good Morning!*\n` +
+      this._examCountdownLine(user) +
+      `📚 ${total} questions today (${perSubject} per subject across ${subjectCount} subject${subjectCount > 1 ? 's' : ''}). Answer each to get the next. Good luck! 🚀\n` +
       this._trialCountdownLine(user, access),
       { parse_mode: 'Markdown' }
     );

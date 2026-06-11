@@ -95,8 +95,10 @@ export class MockService {
     if (finished) {
       const report = this._score(s, timedOut);
       await this.repo.deleteSession(this._key(user.id));
-      // Park the wrong ids for the post-exam corrections button.
-      await this.repo.setSession(`mockfix:${user.id}`, { wrongIds: s.wrongIds });
+      // Park the wrong ids + score for the corrections and share buttons.
+      await this.repo.setSession(`mockfix:${user.id}`, {
+        wrongIds: s.wrongIds, jambScore: report.jambScore, jambOutOf: report.jambOutOf,
+      });
       return { finished: true, timedOut, report };
     }
 
