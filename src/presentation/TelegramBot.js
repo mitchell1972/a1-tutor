@@ -100,7 +100,7 @@ export class TelegramBotAdapter {
     await this._setSession(chatId, { step: 'exam_type', telegramId: chatId, ref: refPayload });
 
     await this.tg.sendWithKeyboard(chatId,
-      `🎓 *Welcome to ExamPrep Bot!*\n\n` +
+      `🎓 *Welcome to A1 Tutor!*\n\n` +
       `I'll send you ${QUESTIONS_PER_SUBJECT} questions per subject, every day.\n\n` +
       `*First — what are you preparing for?*`,
       [
@@ -862,10 +862,24 @@ export class TelegramBotAdapter {
 
   // ─── Affiliate programme ───────────────────────────
 
+  // Channel owners and promoters join the affiliate programme WITHOUT the
+  // student signup: auto-create a lightweight 'partner' account (no subjects,
+  // never dispatched, never trial-chased) so /affiliate and /bank just work.
+  async _getOrCreatePartnerUser(chatId) {
+    let user = await this.userService.repo.getUserByTelegram(chatId);
+    if (!user) {
+      user = await this.userService.repo.createUser({
+        telegram_id: chatId, channel: 'telegram', subjects: [],
+        subscription_status: 'partner',
+      });
+    }
+    return user;
+  }
+
   async _handleAffiliateCmd(msg) {
     const chatId = msg.chat.id;
-    const user = await this.userService.repo.getUserByTelegram(chatId);
-    if (!user) return this.tg.send(chatId, 'Please /start first!');
+    let user = await this.userService.repo.getUserByTelegram(chatId);
+    if (!user) user = await this._getOrCreatePartnerUser(chatId);
     if (typeof this.userService.repo.getAffiliateByUser !== 'function') {
       return this.tg.send(chatId, 'Affiliate programme not available right now.');
     }
@@ -901,8 +915,7 @@ export class TelegramBotAdapter {
   }
 
   async _onAffiliateJoin(chatId) {
-    const user = await this.userService.repo.getUserByTelegram(chatId);
-    if (!user) return;
+    const user = await this._getOrCreatePartnerUser(chatId);
     const existing = await this.userService.repo.getAffiliateByUser(user.id);
     if (existing) return this._handleAffiliateCmd({ chat: { id: chatId } });
 
@@ -930,8 +943,7 @@ export class TelegramBotAdapter {
 
   async _handleBankCmd(msg, match) {
     const chatId = msg.chat.id;
-    const user = await this.userService.repo.getUserByTelegram(chatId);
-    if (!user) return this.tg.send(chatId, 'Please /start first!');
+    const user = await this._getOrCreatePartnerUser(chatId);
     const aff = await this.userService.repo.getAffiliateByUser(user.id);
     if (!aff) return this.tg.send(chatId, 'Join the programme first: /affiliate');
 

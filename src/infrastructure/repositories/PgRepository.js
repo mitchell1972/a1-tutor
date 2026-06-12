@@ -160,7 +160,7 @@ export class PgRepository {
       `INSERT INTO users
          (id, telegram_id, phone, exam_type, subjects, delivery_hour, delivery_minute,
           channel, questions_per_subject, ref_source, subscription_status, trial_start, created_at, updated_at)
-       VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10,'trial', now(), now(), now())
+       VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10,$11, now(), now(), now())
        RETURNING *`,
       [
         id,
@@ -173,6 +173,7 @@ export class PgRepository {
         data.channel ?? 'telegram',
         data.questions_per_subject ?? 10,
         data.ref_source ?? null,
+        data.subscription_status ?? 'trial',
       ]
     );
     return rows[0];

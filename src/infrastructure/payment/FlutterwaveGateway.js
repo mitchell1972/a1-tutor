@@ -9,7 +9,7 @@ export class FlutterwaveGateway {
     this.secretKey = secretKey;
     this.publicKey = publicKey;
     this.webhookSecret = webhookSecret;
-    this.redirectUrl = redirectUrl || 'https://t.me/ExamPrepBot';
+    this.redirectUrl = redirectUrl || 'https://t.me/A1TutorPrep_bot';
 
     this.client = axios.create({
       baseURL: 'https://api.flutterwave.com/v3',
