@@ -23,9 +23,11 @@ export function checkAccess(user, activeSubscription) {
     return { valid: false, status: 'expired', daysLeft: 0, reason: 'subscription_expired' };
   }
 
-  // Free trial
+  // Free trial — anchor to trial_start; if it's somehow missing, fall back to
+  // the signup date (NEVER "now", which would hand out a fresh window on every
+  // check and never expire). Mirrors SubscriptionService.getRecentlyExpiredTrials.
   if (user.subscription_status === 'trial' || !user.subscription_status) {
-    const trialStart = user.trial_start ? new Date(user.trial_start) : now;
+    const trialStart = new Date(user.trial_start || user.created_at || 0);
     const trialEnd = new Date(trialStart);
     trialEnd.setDate(trialEnd.getDate() + TRIAL_DAYS);
 
