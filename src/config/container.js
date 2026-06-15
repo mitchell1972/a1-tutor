@@ -136,6 +136,18 @@ export async function buildContainer(env) {
     console.log('🔔 Engagement nudge: ENABLED');
   }
 
+  // Daily affiliate digest: pushes each active affiliate (whose link has signups) their
+  // students-joined / paying / earnings on Telegram. OFF unless AFFILIATE_DIGEST_ENABLED=true.
+  // AFFILIATE_DIGEST_CRON is server TZ (UTC); default 08:00 UTC = 09:00 WAT, daily.
+  if (env.AFFILIATE_DIGEST_ENABLED === 'true' || env.AFFILIATE_DIGEST_ENABLED === '1') {
+    dailyJobs.push({
+      name: 'affiliate-digest',
+      cron: env.AFFILIATE_DIGEST_CRON || '0 8 * * *',
+      fn: () => dispatchService.runAffiliateDigest(),
+    });
+    console.log('📊 Affiliate digest: ENABLED');
+  }
+
   const scheduler = new CronScheduler(
     (hour, minute) => dispatchService.dispatchAt(hour, minute),
     dailyJobs

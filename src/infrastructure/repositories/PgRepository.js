@@ -464,6 +464,26 @@ export class PgRepository {
     };
   }
 
+  // Active affiliates with a Telegram contact + headline stats — for the daily digest.
+  // (referred/paying mirror getAffiliateEarnings; commissions summed per affiliate.)
+  async getAffiliatesForDigest() {
+    const { rows } = await this.pool.query(
+      `SELECT a.id, a.tag, u.telegram_id,
+              (SELECT count(*) FROM users ru WHERE ru.ref_source = a.tag)::int AS referred,
+              (SELECT count(*) FROM users ru WHERE ru.ref_source = a.tag AND ru.subscription_status = 'active')::int AS paying,
+              COALESCE((SELECT SUM(commission) FROM commissions c WHERE c.affiliate_id = a.id), 0)::numeric AS earned,
+              COALESCE((SELECT SUM(commission) FROM commissions c WHERE c.affiliate_id = a.id AND c.status = 'pending'), 0)::numeric AS pending
+       FROM affiliates a
+       JOIN users u ON u.id = a.user_id
+       WHERE a.status = 'active' AND u.telegram_id IS NOT NULL`
+    );
+    return rows.map(r => ({
+      id: r.id, tag: r.tag, telegram_id: r.telegram_id,
+      referred: Number(r.referred), paying: Number(r.paying),
+      earned: Number(r.earned), pending: Number(r.pending),
+    }));
+  }
+
   // Admin payout view: every affiliate with pending commission, plus bank details.
   async getPendingPayouts() {
     const { rows } = await this.pool.query(

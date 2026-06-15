@@ -246,6 +246,30 @@ export class JsonlRepository {
     return dispatches.flatMap(d => d.question_ids || []);
   }
 
+  // ─── Affiliates (digest only; full affiliate support is Postgres-backed) ──
+  getAffiliatesForDigest() {
+    const affiliates = this._read('affiliates');
+    if (!affiliates.length) return [];
+    const users = this._read('users');
+    const commissions = this._read('commissions');
+    return affiliates
+      .filter(a => (a.status || 'active') === 'active')
+      .map(a => {
+        const u = users.find(x => x.id === a.user_id);
+        if (!u || !u.telegram_id) return null;
+        const referred = users.filter(ru => ru.ref_source === a.tag);
+        const comms = commissions.filter(c => c.affiliate_id === a.id);
+        return {
+          id: a.id, tag: a.tag, telegram_id: u.telegram_id,
+          referred: referred.length,
+          paying: referred.filter(ru => ru.subscription_status === 'active').length,
+          earned: comms.reduce((s, c) => s + (c.commission || 0), 0),
+          pending: comms.filter(c => c.status === 'pending').reduce((s, c) => s + (c.commission || 0), 0),
+        };
+      })
+      .filter(Boolean);
+  }
+
   // ─── Sessions (in-memory; single-process fallback) ──
 
   getSession(key) {

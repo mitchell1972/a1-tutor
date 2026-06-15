@@ -280,6 +280,45 @@ export class DispatchService {
     return true;
   }
 
+  // ─── Affiliate daily digest ────────────────────────
+  // Messages each affiliate whose link has pulled at least one signup their headline
+  // numbers (signups, paying, earnings) on Telegram. Env-gated (AFFILIATE_DIGEST_ENABLED).
+  async runAffiliateDigest() {
+    if (typeof this.repo.getAffiliatesForDigest !== 'function') return { sent: 0, skipped: 0 };
+    const affiliates = await this.repo.getAffiliatesForDigest();
+    if (!affiliates.length) return { sent: 0, skipped: 0 };
+
+    let sent = 0;
+    let skipped = 0;
+    for (const a of affiliates) {
+      try {
+        // Only ping partners whose link has actually pulled signups — no spamming dormant ones.
+        if (!a.referred || !a.telegram_id) { skipped++; continue; }
+        await this._sendAffiliateDigest(a);
+        sent++;
+        await this._sleep(1500);
+      } catch (err) {
+        console.error(`Affiliate digest failed for ${a.id}:`, err.message);
+      }
+    }
+    console.log(`📊 Affiliate digest: ${sent} sent, ${skipped} skipped (${affiliates.length} affiliates)`);
+    return { sent, skipped };
+  }
+
+  async _sendAffiliateDigest(a) {
+    if (!a.telegram_id) return;
+    const lines = [
+      `📊 *Your A1 Tutor partner update*`,
+      ``,
+      `👥 Students joined via your link: *${a.referred}*`,
+      `🟢 Currently paying: *${a.paying}*`,
+    ];
+    if (a.earned > 0) lines.push(`💰 Earned so far: *₦${a.earned.toLocaleString()}*`);
+    if (a.pending > 0) lines.push(`⏳ Pending payout: *₦${a.pending.toLocaleString()}*`);
+    lines.push(``, `Keep sharing your link to grow this! Full details anytime with /affiliate.`);
+    await this.telegram.send(a.telegram_id, lines.join('\n'), { parse_mode: 'Markdown' });
+  }
+
   _sleep(ms) {
     return new Promise(r => setTimeout(r, ms));
   }
