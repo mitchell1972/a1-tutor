@@ -208,20 +208,25 @@ export class DispatchService {
 
   // ─── Re-engagement nudge ───────────────────────────
   // Re-prompts students who received today's questions but haven't answered any.
-  // Wired as an env-gated daily job (NUDGE_ENABLED) a few hours after the morning
-  // push. Idempotent — at most one nudge per student per day. Telegram only.
+  // Wired as an env-gated job (NUDGE_ENABLED); NUDGE_CRON sets the schedule, which may
+  // fire more than once a day (e.g. 2pm + 6pm WAT). Idempotent per run-slot — a student
+  // is nudged at most once per scheduled run, so extra runs re-remind those still
+  // inactive, while a restart can't double-fire the same run. Telegram only.
   async runEngagementNudge() {
     const candidates = await this.repo.getUsersToNudge();
     if (!candidates.length) return { nudged: 0, skipped: 0 };
 
-    const today = new Date().toISOString().slice(0, 10);
+    // One nudge per run-slot = UTC date + hour. Runs at different hours (e.g. 13:00,
+    // 17:00) each get a distinct slot → a still-inactive student gets a repeat nudge;
+    // a same-hour re-run (e.g. after a restart) is skipped.
+    const now = new Date();
+    const slot = `${now.toISOString().slice(0, 10)}:${now.getUTCHours()}`;
     let nudged = 0;
     let skipped = 0;
     for (const user of candidates) {
       try {
-        // Idempotency — never nudge the same student twice in a day.
         const marker = await this.repo.getSession(`nudge:${user.id}`);
-        if (marker?.date === today) { skipped++; continue; }
+        if (marker?.slot === slot) { skipped++; continue; }
 
         // Confirm live access — a trial may have lapsed since the morning push.
         const access = await this.subscriptionService.getStatus(user.id);
@@ -229,7 +234,7 @@ export class DispatchService {
 
         const sent = await this._sendNudge(user, access);
         if (sent) {
-          await this.repo.setSession(`nudge:${user.id}`, { date: today });
+          await this.repo.setSession(`nudge:${user.id}`, { slot });
           nudged++;
           await this._sleep(1500); // gentle pacing, mirrors dispatch
         } else {

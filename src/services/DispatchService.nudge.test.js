@@ -4,6 +4,11 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { DispatchService } from './DispatchService.js';
 
+const currentSlot = () => {
+  const now = new Date();
+  return `${now.toISOString().slice(0, 10)}:${now.getUTCHours()}`;
+};
+
 function makeService(opts = {}) {
   const {
     candidates = [{ id: 'u1', telegram_id: 111 }],
@@ -35,7 +40,7 @@ function makeService(opts = {}) {
   return { svc, sent, setSessions };
 }
 
-test('nudges a valid candidate, sends the question, and marks them', async () => {
+test('nudges a valid candidate, sends the question, and marks the run-slot', async () => {
   const { svc, sent, setSessions } = makeService();
   const r = await svc.runEngagementNudge();
   assert.equal(r.nudged, 1);
@@ -44,17 +49,26 @@ test('nudges a valid candidate, sends the question, and marks them', async () =>
   assert.ok(sent.some(s => s[0] === 'kb'), 'sends the question with answer buttons');
   assert.equal(setSessions.length, 1);
   assert.equal(setSessions[0].k, 'nudge:u1');
-  assert.ok(setSessions[0].v.date, 'marker carries a date');
+  assert.ok(setSessions[0].v.slot, 'marker carries a run-slot');
 });
 
-test('skips a candidate already nudged today (idempotent)', async () => {
-  const today = new Date().toISOString().slice(0, 10);
-  const { svc, sent, setSessions } = makeService({ session: { date: today } });
+test('skips a candidate already nudged in this run-slot (idempotent)', async () => {
+  const { svc, sent, setSessions } = makeService({ session: { slot: currentSlot() } });
   const r = await svc.runEngagementNudge();
   assert.equal(r.nudged, 0);
   assert.equal(r.skipped, 1);
-  assert.equal(sent.length, 0, 'no message sent');
+  assert.equal(sent.length, 0, 'no message sent twice in the same run-slot');
   assert.equal(setSessions.length, 0);
+});
+
+test('nudges again in a different run-slot (e.g. 6pm after a 2pm nudge)', async () => {
+  // A marker from an earlier slot must NOT block the current run.
+  const { svc, sent, setSessions } = makeService({ session: { slot: '2020-01-01:0' } });
+  const r = await svc.runEngagementNudge();
+  assert.equal(r.nudged, 1, 'a different/earlier slot does not block a fresh nudge');
+  assert.ok(sent.some(s => s[0] === 'send'));
+  assert.equal(setSessions.length, 1);
+  assert.equal(setSessions[0].v.slot, currentSlot());
 });
 
 test('skips a candidate whose access has lapsed since this morning', async () => {
