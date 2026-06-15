@@ -206,6 +206,75 @@ export class DispatchService {
     }
   }
 
+  // ─── Re-engagement nudge ───────────────────────────
+  // Re-prompts students who received today's questions but haven't answered any.
+  // Wired as an env-gated daily job (NUDGE_ENABLED) a few hours after the morning
+  // push. Idempotent — at most one nudge per student per day. Telegram only.
+  async runEngagementNudge() {
+    const candidates = await this.repo.getUsersToNudge();
+    if (!candidates.length) return { nudged: 0, skipped: 0 };
+
+    const today = new Date().toISOString().slice(0, 10);
+    let nudged = 0;
+    let skipped = 0;
+    for (const user of candidates) {
+      try {
+        // Idempotency — never nudge the same student twice in a day.
+        const marker = await this.repo.getSession(`nudge:${user.id}`);
+        if (marker?.date === today) { skipped++; continue; }
+
+        // Confirm live access — a trial may have lapsed since the morning push.
+        const access = await this.subscriptionService.getStatus(user.id);
+        if (!access.valid) { skipped++; continue; }
+
+        const sent = await this._sendNudge(user, access);
+        if (sent) {
+          await this.repo.setSession(`nudge:${user.id}`, { date: today });
+          nudged++;
+          await this._sleep(1500); // gentle pacing, mirrors dispatch
+        } else {
+          skipped++;
+        }
+      } catch (err) {
+        console.error(`Nudge failed for ${user.id}:`, err.message);
+      }
+    }
+    console.log(`🔔 Engagement nudge: ${nudged} sent, ${skipped} skipped (${candidates.length} candidates)`);
+    return { nudged, skipped };
+  }
+
+  // Re-sends today's first (unanswered) question so a single tap resumes the normal
+  // send-on-answer flow. Telegram only — WhatsApp proactive needs an approved template.
+  async _sendNudge(user, access) {
+    if (!user.telegram_id) return false;
+
+    const dispatches = await this.repo.getTodayDispatches(user.id);
+    const ids = dispatches.flatMap(d => d.question_ids || []);
+    if (!ids.length) return false;
+    const q = await this.repo.getQuestion(ids[0]);
+    if (!q) return false;
+
+    const trialLine = access?.status === 'trial'
+      ? (access.daysLeft <= 1
+          ? ' ⏳ Your free trial ends today — don\'t miss out!'
+          : ` ⏳ ${access.daysLeft} days left on your free trial.`)
+      : '';
+    await this.telegram.send(user.telegram_id,
+      `📚 *Your questions are waiting!*\nYou haven't answered today's practice yet — here's your first one. It takes about 2 minutes.${trialLine}`,
+      { parse_mode: 'Markdown' });
+
+    const formatted = this.questionService.formatQuestion(q, 0, ids.length);
+    const options = typeof q.options === 'string' ? JSON.parse(q.options) : (q.options || {});
+    await this.telegram.sendWithKeyboard(user.telegram_id,
+      `*${formatted.header}*\n\n${formatted.body}`,
+      Object.entries(options).map(([key, val]) => ([{
+        text: `${key}) ${String(val).length > 40 ? String(val).slice(0, 37) + '...' : val}`,
+        callback_data: `answer:${q.id}:${key}`,
+      }]))
+    );
+    return true;
+  }
+
   _sleep(ms) {
     return new Promise(r => setTimeout(r, ms));
   }

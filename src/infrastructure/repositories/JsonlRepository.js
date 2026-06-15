@@ -96,6 +96,28 @@ export class JsonlRepository {
     });
   }
 
+  // Parity with PgRepository.getUsersToNudge: Telegram users dispatched today but
+  // who have not answered any question today.
+  getUsersToNudge() {
+    const start = new Date();
+    start.setHours(0, 0, 0, 0);
+    const dispatchedToday = new Set(
+      this._read('dispatches')
+        .filter(d => new Date(d.dispatched_at) >= start)
+        .map(d => d.user_id)
+    );
+    const answeredToday = new Set(
+      this._read('responses')
+        .filter(r => new Date(r.answered_at) >= start)
+        .map(r => r.user_id)
+    );
+    return this._read('users').filter(u =>
+      u.telegram_id &&
+      (u.subscription_status === 'trial' || u.subscription_status === 'active') &&
+      dispatchedToday.has(u.id) && !answeredToday.has(u.id)
+    );
+  }
+
   // ─── Questions ─────────────────────────────────────
 
   getQuestionsBySubject(subject, count, opts = {}) {

@@ -225,6 +225,23 @@ export class PgRepository {
     return rows;
   }
 
+  // Telegram users who received today's questions but haven't answered any yet —
+  // candidates for the re-engagement nudge. Coarse access filter (trial/active);
+  // the service confirms live access before sending. WhatsApp is excluded here
+  // because proactive sends outside the 24h window need an approved template.
+  async getUsersToNudge() {
+    const { rows } = await this.pool.query(
+      `SELECT u.* FROM users u
+       WHERE u.telegram_id IS NOT NULL
+         AND u.subscription_status IN ('trial', 'active')
+         AND EXISTS (SELECT 1 FROM dispatches d
+                     WHERE d.user_id = u.id AND d.dispatched_at >= date_trunc('day', now()))
+         AND NOT EXISTS (SELECT 1 FROM responses r
+                         WHERE r.user_id = u.id AND r.answered_at >= date_trunc('day', now()))`
+    );
+    return rows;
+  }
+
   // ─── Questions ─────────────────────────────────────
 
   async getQuestionsBySubject(subject, count, opts = {}) {

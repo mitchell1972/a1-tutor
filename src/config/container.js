@@ -123,6 +123,19 @@ export async function buildContainer(env) {
     console.log('🧑‍🏫 Weekly AI coach notes: ENABLED');
   }
 
+  // Re-engagement nudge: re-prompts students who received today's questions but
+  // haven't answered, a few hours after the morning push. OFF unless NUDGE_ENABLED=true
+  // so a deploy alone never starts messaging users. Telegram only. NUDGE_CRON is in the
+  // server timezone (UTC); default 13:00 UTC = 14:00 WAT.
+  if (env.NUDGE_ENABLED === 'true' || env.NUDGE_ENABLED === '1') {
+    dailyJobs.push({
+      name: 'engagement-nudge',
+      cron: env.NUDGE_CRON || '0 13 * * *',
+      fn: () => dispatchService.runEngagementNudge(),
+    });
+    console.log('🔔 Engagement nudge: ENABLED');
+  }
+
   const scheduler = new CronScheduler(
     (hour, minute) => dispatchService.dispatchAt(hour, minute),
     dailyJobs
