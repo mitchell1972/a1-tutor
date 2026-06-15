@@ -509,6 +509,12 @@ export class TelegramBotAdapter {
 
   async _sendCoachNote(chatId, user) {
     if (!this.coachService) return this.tg.send(chatId, '🧑‍🏫 Coach is not available right now.');
+
+    const access = await this.subscriptionService.getStatus(user.id);
+    if (!access.valid) {
+      return this.tg.sendWithKeyboard(chatId, '🔒 The AI coach needs an active trial or subscription:', this._plansKeyboard(user.id));
+    }
+
     await this.tg.send(chatId, '🧑‍🏫 Looking at your progress…');
 
     const { limited, note } = await this.coachService.onDemandNote(user);
@@ -559,6 +565,11 @@ export class TelegramBotAdapter {
   async _onPracticeTopic(chatId, subjectId, topicId) {
     const user = await this.userService.repo.getUserByTelegram(chatId);
     if (!user) return;
+
+    const access = await this.subscriptionService.getStatus(user.id);
+    if (!access.valid) {
+      return this.tg.sendWithKeyboard(chatId, '🔒 Topic practice needs an active trial or subscription:', this._plansKeyboard(user.id));
+    }
 
     const questions = await this.questionService.getTopicQuestions(user, subjectId, topicId, 5);
     if (!questions.length) {
