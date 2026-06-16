@@ -119,6 +119,13 @@ export class JsonlRepository {
     );
   }
 
+  // Parity with PgRepository.getStudentsToRemind: students (not affiliates, not paying) on Telegram.
+  getStudentsToRemind() {
+    return this._read('users')
+      .filter(u => u.telegram_id && !['active', 'partner'].includes(u.subscription_status))
+      .map(u => ({ id: u.id, telegram_id: u.telegram_id }));
+  }
+
   // ─── Questions ─────────────────────────────────────
 
   getQuestionsBySubject(subject, count, opts = {}) {

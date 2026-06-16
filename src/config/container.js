@@ -151,6 +151,18 @@ export async function buildContainer(env) {
     console.log('📊 Affiliate digest: ENABLED');
   }
 
+  // Daily sign-up / subscribe reminder to STUDENTS only (affiliates + paying users excluded).
+  // OFF unless SIGNUP_NUDGE_ENABLED=true. SIGNUP_NUDGE_CRON is server TZ (UTC); default
+  // 07:00 UTC = 08:00 WAT (every morning at 8am for Nigerian students).
+  if (env.SIGNUP_NUDGE_ENABLED === 'true' || env.SIGNUP_NUDGE_ENABLED === '1') {
+    dailyJobs.push({
+      name: 'signup-reminder',
+      cron: env.SIGNUP_NUDGE_CRON || '0 7 * * *',
+      fn: () => dispatchService.runSignupNudge(),
+    });
+    console.log('📣 Daily signup reminder: ENABLED');
+  }
+
   const scheduler = new CronScheduler(
     (hour, minute) => dispatchService.dispatchAt(hour, minute),
     dailyJobs

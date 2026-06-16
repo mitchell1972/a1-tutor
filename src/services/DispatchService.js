@@ -280,6 +280,47 @@ export class DispatchService {
     return true;
   }
 
+  // ─── Daily sign-up reminder ────────────────────────
+  // Once-a-day morning DM to STUDENTS only (never affiliates/partners, never paying users)
+  // reminding them of the features and nudging them to sign up. A per-UTC-day marker makes a
+  // restart-retry on the same day idempotent. Env-gated (SIGNUP_NUDGE_ENABLED).
+  async runSignupNudge() {
+    const students = await this.repo.getStudentsToRemind();
+    if (!students.length) return { sent: 0, skipped: 0 };
+
+    const day = new Date().toISOString().slice(0, 10);
+    let sent = 0;
+    let skipped = 0;
+    for (const u of students) {
+      try {
+        const marker = await this.repo.getSession(`signup_nudge:${u.id}`);
+        if (marker?.day === day) { skipped++; continue; }   // already reminded today
+        await this._sendSignupNudge(u);
+        await this.repo.setSession(`signup_nudge:${u.id}`, { day });
+        sent++;
+        await this._sleep(1500); // gentle pacing
+      } catch (err) {
+        console.error(`Signup reminder failed for ${u.id}:`, err.message);
+      }
+    }
+    console.log(`📣 Signup reminder: ${sent} sent, ${skipped} skipped (${students.length} students)`);
+    return { sent, skipped };
+  }
+
+  async _sendSignupNudge(user) {
+    const text =
+      `🌅 *Good morning!* Your A1 Tutor account is ready and waiting.\n\n` +
+      `Everything you need for JAMB, WAEC, NECO & Post-UTME:\n` +
+      `✅ 9,000+ practice questions across 30+ subjects\n` +
+      `📅 Real past papers — practise by year (e.g. JAMB Physics 2023)\n` +
+      `💡 A clear, step-by-step explanation on every question\n` +
+      `📝 Timed mock exams, daily practice & AI coaching\n\n` +
+      `Sign up for full access and keep your prep on track 👇`;
+    return this.telegram.sendWithKeyboard(user.telegram_id, text, [
+      [{ text: '💳 See plans & sign up', callback_data: 'menu:subscribe' }],
+    ]);
+  }
+
   // ─── Affiliate daily digest ────────────────────────
   // Messages each affiliate whose link has pulled at least one signup their headline
   // numbers (signups, paying, earnings) on Telegram. Env-gated (AFFILIATE_DIGEST_ENABLED).

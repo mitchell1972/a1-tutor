@@ -243,6 +243,17 @@ export class PgRepository {
     return rows;
   }
 
+  // Students for the daily sign-up reminder: real students (never affiliates/partners) who are
+  // not already paying. telegram_id required (the reminder is a Telegram DM).
+  async getStudentsToRemind() {
+    const { rows } = await this.pool.query(
+      `SELECT id, telegram_id FROM users
+       WHERE telegram_id IS NOT NULL
+         AND (subscription_status IS NULL OR subscription_status NOT IN ('active', 'partner'))`
+    );
+    return rows;
+  }
+
   // ─── Questions ─────────────────────────────────────
 
   async getQuestionsBySubject(subject, count, opts = {}) {
