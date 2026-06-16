@@ -142,6 +142,8 @@ export class TelegramBotAdapter {
       else if (data === 'menu:practice') await this._handlePracticeCmd({ chat: { id: chatId } });
       else if (data === 'menu:report') await this._handleReportCmd({ chat: { id: chatId } });
       else if (data.startsWith('pracsub:')) await this._onPracticeSubject(chatId, data.split(':')[1]);
+      else if (data.startsWith('pracyear:')) await this._onPracticeYears(chatId, data.split(':')[1]);
+      else if (data.startsWith('pracyq:')) await this._onPracticeYear(chatId, data.split(':')[1], data.split(':')[2]);
       else if (data.startsWith('practopic:')) await this._onPracticeTopic(chatId, data.split(':')[1], data.split(':')[2]);
       else if (data.startsWith('pracans:')) await this._onPracticeAnswer(chatId, data, query.message.message_id);
       else if (data.startsWith('answer:')) await this._onAnswer(chatId, data, query.message.message_id);
@@ -554,12 +556,57 @@ export class TelegramBotAdapter {
   async _onPracticeSubject(chatId, subjectId) {
     const subject = SUBJECTS[subjectId];
     if (!subject) return;
-    const rows = [];
+    const rows = [[{ text: '📅 Past papers by year', callback_data: `pracyear:${subjectId}` }]];
     for (let i = 0; i < subject.topics.length; i += 2) {
       rows.push(subject.topics.slice(i, i + 2).map(t =>
         ({ text: formatTopic(t), callback_data: `practopic:${subjectId}:${t}` })));
     }
-    await this.tg.sendWithKeyboard(chatId, `${subject.icon} *${subject.name}* — pick the topic to drill:`, rows);
+    await this.tg.sendWithKeyboard(chatId, `${subject.icon} *${subject.name}* — pick a topic, or past papers by year:`, rows);
+  }
+
+  // Past papers by year: show the years we hold real past questions for (this subject + exam).
+  async _onPracticeYears(chatId, subjectId) {
+    const user = await this.userService.repo.getUserByTelegram(chatId);
+    if (!user) return;
+    const subject = SUBJECTS[subjectId];
+    if (!subject) return;
+
+    const years = await this.questionService.getAvailableYears(user, subjectId);
+    if (!years.length) {
+      return this.tg.sendWithKeyboard(chatId,
+        `${subject.icon} *${subject.name}* — no past-paper years yet for your exam. Practise by topic instead:`,
+        [[{ text: '🎯 Practice by topic', callback_data: `pracsub:${subjectId}` }], [{ text: '📋 Menu', callback_data: 'menu:main' }]]);
+    }
+    const rows = [];
+    for (let i = 0; i < years.length; i += 3) {
+      rows.push(years.slice(i, i + 3).map(y => ({ text: String(y), callback_data: `pracyq:${subjectId}:${y}` })));
+    }
+    rows.push([{ text: '« Topics instead', callback_data: `pracsub:${subjectId}` }]);
+    await this.tg.sendWithKeyboard(chatId, `${subject.icon} *${subject.name}* — pick a past-paper year:`, rows);
+  }
+
+  async _onPracticeYear(chatId, subjectId, year) {
+    const user = await this.userService.repo.getUserByTelegram(chatId);
+    if (!user) return;
+
+    const access = await this.subscriptionService.getStatus(user.id);
+    if (!access.valid) {
+      return this.tg.sendWithKeyboard(chatId, '🔒 Past-paper practice needs an active trial or subscription:', this._plansKeyboard(user.id));
+    }
+
+    const subject = SUBJECTS[subjectId];
+    const questions = await this.questionService.getYearQuestions(user, subjectId, year, 5);
+    if (!questions.length) {
+      return this.tg.send(chatId, `No ${year} past questions left for ${subject?.name || subjectId} right now — you may have cleared them. Try another year or a topic!`);
+    }
+
+    await this.userService.repo.setSession(`prac:${chatId}`, {
+      ids: questions.map(q => q.id), idx: 0, correct: 0, subjectId, year,
+    });
+    await this.tg.send(chatId,
+      `📅 *${subject?.name || subjectId} — ${year} past paper* · ${questions.length} questions, instant feedback. Let's go!`,
+      { parse_mode: 'Markdown' });
+    return this._sendPracticeQuestion(chatId, questions[0], 0, questions.length);
   }
 
   async _onPracticeTopic(chatId, subjectId, topicId) {
@@ -615,7 +662,15 @@ export class TelegramBotAdapter {
     if (sess.idx >= sess.ids.length) {
       await this.userService.repo.deleteSession(sKey);
       const pct = Math.round((sess.correct / sess.ids.length) * 100);
-      const verdict = pct >= 80 ? 'Mastering it! 🌟' : pct >= 60 ? 'Good — a few more rounds and it\'s yours. 👍' : 'Tough topic — let\'s keep chipping at it. 💪';
+      const verdict = pct >= 80 ? 'Mastering it! 🌟' : pct >= 60 ? 'Good — a few more rounds and it\'s yours. 👍' : 'Tough one — let\'s keep chipping at it. 💪';
+      if (sess.year) {
+        return this.tg.sendWithKeyboard(chatId,
+          `📅 *${sess.year} past paper: ${sess.correct}/${sess.ids.length} (${pct}%)*\n${verdict}`,
+          [
+            [{ text: `🔁 5 more from ${sess.year}`, callback_data: `pracyq:${sess.subjectId}:${sess.year}` }],
+            [{ text: '📅 Another year', callback_data: `pracyear:${sess.subjectId}` }, { text: '📋 Menu', callback_data: 'menu:main' }],
+          ]);
+      }
       return this.tg.sendWithKeyboard(chatId,
         `🎯 *${formatTopic(sess.topicId)}: ${sess.correct}/${sess.ids.length} (${pct}%)*\n${verdict}`,
         [

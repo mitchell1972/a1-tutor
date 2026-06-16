@@ -98,6 +98,35 @@ export class QuestionService {
   }
 
   /**
+   * Distinct past-paper years available for a subject (real past questions only),
+   * newest first — used to offer "practice by year".
+   */
+  async getAvailableYears(user, subjectId) {
+    const pool = await this.repo.getQuestionsBySubject(subjectId, 100000, { exam: user.exam_type || null });
+    return [...new Set(pool.filter(q => q.source === 'past' && q.year).map(q => Number(q.year)))]
+      .filter(Boolean)
+      .sort((a, b) => b - a);
+  }
+
+  /**
+   * Real past-paper questions for a subject + year (fresh-first, difficulty-mixed).
+   * Served through the same practice-session machinery as topic practice.
+   */
+  async getYearQuestions(user, subjectId, year, n = 5) {
+    const pool = (await this.repo.getQuestionsBySubject(subjectId, n * 40, {
+      exam: user.exam_type || null,
+    })).filter(q => q.source === 'past' && String(q.year) === String(year));
+    if (!pool.length) return [];
+
+    const answered = new Set(
+      (await this.repo.getResponses(user.id, { limit: 5000 })).map(r => r.question_id)
+    );
+    const fresh = pool.filter(q => !answered.has(q.id));
+    const source = fresh.length >= Math.min(n, 3) ? fresh : pool;
+    return pickWithDifficultyMix(source, Math.min(n, source.length));
+  }
+
+  /**
    * Check if user has already been dispatched questions today.
    */
   async isAlreadyDispatchedToday(userId) {
