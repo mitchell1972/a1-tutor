@@ -99,6 +99,9 @@ export async function buildContainer(env) {
         perTopic: Number(env.GEN_PER_TOPIC) || 4,
         maxPerExam: Number(env.GEN_MAX_PER_EXAM) || 700,
         mode: env.GEN_MODE || 'predict',
+        // GEN_EXAMS (comma list) overrides which exams are topped up daily; default covers
+        // jamb, ssce, post_utme, gst, squad (see dailyGenerator DEFAULT_EXAMS).
+        exams: env.GEN_EXAMS ? env.GEN_EXAMS.split(',').map(s => s.trim()).filter(Boolean) : undefined,
       }),
     });
     console.log('🧠 Daily question generation: ENABLED');
