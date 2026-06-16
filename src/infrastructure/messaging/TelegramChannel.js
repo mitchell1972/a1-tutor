@@ -50,10 +50,26 @@ export class TelegramChannel {
     } catch (err) {
       if (err.response?.statusCode === 403) {
         console.warn(`TelegramChannel: user ${chatId} blocked the bot`);
-      } else {
-        throw err;
+        return;
       }
+      // Telegram refuses a whole message when its Markdown can't be parsed — e.g. a
+      // question whose text contains an unbalanced * _ [ or ` (rife in maths/chemistry).
+      // Rather than silently drop it (the student taps and gets nothing), resend once
+      // as plain text so they still receive the content. Buttons are preserved.
+      if (opts.parse_mode && this._isParseError(err)) {
+        console.warn(`TelegramChannel: markdown parse error for ${chatId}; resending as plain text`);
+        const { parse_mode, ...rest } = opts;
+        return await this.limiter.schedule(() => this.bot.sendMessage(chatId, text, rest));
+      }
+      throw err;
     }
+  }
+
+  // True when Telegram rejected a message because its entities (Markdown/HTML) are malformed.
+  _isParseError(err) {
+    const code = err.response?.statusCode ?? err.response?.body?.error_code;
+    const desc = err.response?.body?.description || err.message || '';
+    return code === 400 && /can'?t parse entities|parse entities/i.test(desc);
   }
 
   async sendWithKeyboard(chatId, text, keyboard) {
