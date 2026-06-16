@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { genId, normalizePhone, nowISO, todayISO, daysAgo } from './helpers.js';
+import { bankExam } from '../../config/subjects.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '..', '..', '..', 'data');
@@ -126,9 +127,10 @@ export class JsonlRepository {
       .filter(q => q.subject === subject)
       .filter(q => !excludeIds.includes(q.id));
 
-    // Filter by exam type (JAMB, SSCE, NECO)
-    if (exam) {
-      questions = questions.filter(q => q.exam === exam);
+    // Filter by exam type. bankExam() maps aliased exams (e.g. NECO -> SSCE) to their shared bank.
+    const ex = bankExam(exam);
+    if (ex) {
+      questions = questions.filter(q => q.exam === ex);
     }
 
     // Sort by times_used ascending (fair rotation — least used first)

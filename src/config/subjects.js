@@ -17,6 +17,14 @@ export const EXAM_TYPES = {
   ICAN:      { id: 'ican',      label: 'ICAN (Accounting)',        compulsorySubject: null },
 };
 
+// Some exams share another exam's question bank (same syllabus, different examining board).
+// NECO sits the SSCE syllabus, so NECO users are served from the WAEC/SSCE bank instead of
+// maintaining a duplicate set. bankExam() maps a user's exam_type to the exam to query.
+export const EXAM_BANK_ALIAS = { neco: 'ssce' };
+export function bankExam(examType) {
+  return examType ? (EXAM_BANK_ALIAS[examType] || examType) : null;
+}
+
 export const SUBJECTS = {
   // ═══════════ SECONDARY (JAMB/SSCE/NECO) ═══════════
 

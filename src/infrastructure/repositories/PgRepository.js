@@ -4,6 +4,7 @@
 // zero-dependency fallback for local dev and tests.
 import pg from 'pg';
 import { genId, normalizePhone, nowISO } from './helpers.js';
+import { bankExam } from '../../config/subjects.js';
 
 const { Pool } = pg;
 
@@ -252,7 +253,7 @@ export class PgRepository {
          AND ($2::text IS NULL OR exam = $2)
          AND NOT (id = ANY($3::text[]))
        ORDER BY COALESCE(times_used, 0) ASC`,
-      [subject, exam, excludeIds]
+      [subject, bankExam(exam), excludeIds]
     );
     return rows;
   }
