@@ -384,6 +384,14 @@ export class PgRepository {
     return rows;
   }
 
+  // Used by payment reconciliation to detect webhook-dropped payments.
+  async getSubscriptionByTxRef(txRef) {
+    const { rows } = await this.pool.query(
+      'SELECT * FROM subscriptions WHERE tx_ref = $1 LIMIT 1', [txRef]
+    );
+    return rows[0] || null;
+  }
+
   async getTotalRevenue() {
     // Sum what was actually paid — survives price changes over time.
     const { rows } = await this.pool.query(

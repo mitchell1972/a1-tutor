@@ -167,4 +167,27 @@ export class FlutterwaveGateway {
       return { verified: false };
     }
   }
+
+  /**
+   * List successful transactions, for the daily payment-reconciliation safety net.
+   * Pages defensively and caps pages to avoid a runaway on large accounts.
+   */
+  async listSuccessfulTransactions({ maxPages = 5 } = {}) {
+    const out = [];
+    for (let page = 1; page <= maxPages; page++) {
+      try {
+        const { data } = await this.client.get('/transactions', {
+          params: { status: 'successful', page },
+        });
+        const batch = data?.data || [];
+        out.push(...batch);
+        const totalPages = data?.meta?.page_info?.total_pages ?? 1;
+        if (batch.length === 0 || page >= totalPages) break;
+      } catch (err) {
+        console.warn(`FlutterwaveGateway.listSuccessfulTransactions page ${page} failed: ${err.message}`);
+        break;
+      }
+    }
+    return out;
+  }
 }

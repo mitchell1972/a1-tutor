@@ -82,6 +82,7 @@ export async function buildContainer(env) {
     whatsapp: whatsappChannel,
     whatsappDailyTemplate: env.WHATSAPP_DAILY_TEMPLATE || null,
     whatsappTemplateLang: env.WHATSAPP_TEMPLATE_LANG || 'en',
+    adminChatId: env.ADMIN_TELEGRAM_ID || null,
   });
 
   // ─── Scheduler ─────────────────────────────────────
@@ -161,6 +162,19 @@ export async function buildContainer(env) {
       fn: () => dispatchService.runSignupNudge(),
     });
     console.log('📣 Daily signup reminder: ENABLED');
+  }
+
+  // Daily payment reconciliation: re-checks Flutterwave's successful payments against the
+  // subscriptions table, auto-activates any the webhook dropped, and alerts the admin
+  // (ADMIN_TELEGRAM_ID). OFF unless RECONCILE_ENABLED=true. RECONCILE_CRON is server TZ
+  // (UTC); default 06:30 UTC = 07:30 WAT.
+  if (env.RECONCILE_ENABLED === 'true' || env.RECONCILE_ENABLED === '1') {
+    dailyJobs.push({
+      name: 'payment-reconciliation',
+      cron: env.RECONCILE_CRON || '30 6 * * *',
+      fn: () => dispatchService.runPaymentReconciliation(),
+    });
+    console.log('💳 Daily payment reconciliation: ENABLED');
   }
 
   const scheduler = new CronScheduler(

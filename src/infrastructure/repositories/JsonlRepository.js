@@ -225,6 +225,11 @@ export class JsonlRepository {
       .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
   }
 
+  // Parity with PgRepository.getSubscriptionByTxRef (payment reconciliation).
+  getSubscriptionByTxRef(txRef) {
+    return this._read('subscriptions').find(s => s.tx_ref === txRef) || null;
+  }
+
   getTotalRevenue() {
     const plans = { weekly: 500, monthly: 1500, termly: 4000, yearly: 12000 };
     return this._read('subscriptions')

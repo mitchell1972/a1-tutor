@@ -183,6 +183,50 @@ export class PaymentService {
   }
 
   /**
+   * Daily payment-reconciliation safety net. Pulls successful Flutterwave
+   * transactions and ensures each has a matching subscription. Any payment the
+   * webhook dropped is re-verified and (when autoFix) activated through the SAME
+   * path the webhook uses — so the student gets access and the affiliate is paid.
+   * Idempotent: skips any tx_ref already recorded.
+   */
+  async reconcile({ autoFix = true } = {}) {
+    if (typeof this.flutterwave.listSuccessfulTransactions !== 'function') {
+      return { checked: 0, missing: 0, fixed: 0, failed: 0, gaps: [] };
+    }
+    const txns = await this.flutterwave.listSuccessfulTransactions();
+    const report = { checked: 0, missing: 0, fixed: 0, failed: 0, gaps: [] };
+
+    for (const t of txns) {
+      const txRef = t.tx_ref || '';
+      // Only our subscription charges; card-setup charges aren't subscriptions.
+      if (!/^(exambot|a1)-/.test(txRef) || txRef.includes('cardsetup')) continue;
+      report.checked++;
+
+      const existing = await this.repo.getSubscriptionByTxRef(txRef);
+      if (existing) continue;             // already recorded — nothing to do
+      report.missing++;
+
+      let fixed = false;
+      let reason = 'alert_only';
+      if (autoFix) {
+        const v = await this.flutterwave.verifyTransaction(t.id, txRef);
+        const userId = v.meta?.user_id;
+        const plan = v.meta?.plan;
+        if (v.verified && userId && plan) {
+          await this._activate(userId, plan, txRef, v.amount ?? t.amount, t.id);
+          fixed = true;
+          report.fixed++;
+        } else {
+          report.failed++;
+          reason = !v.verified ? 'verify_failed' : 'missing_meta';
+        }
+      }
+      report.gaps.push({ txRef, flwId: t.id, amount: t.amount, fixed, reason });
+    }
+    return report;
+  }
+
+  /**
    * Get all available plans for display.
    */
   getPlans() {

@@ -6,13 +6,14 @@ import { TRIAL_DAYS, EXAM_TYPES, daysToExam } from '../config/subjects.js';
 import { getPlan, PLANS } from '../config/plans.js';
 
 export class DispatchService {
-  constructor({ repo, questionService, subscriptionService, paymentService, telegram, whatsapp, whatsappDailyTemplate, whatsappTemplateLang }) {
+  constructor({ repo, questionService, subscriptionService, paymentService, telegram, whatsapp, whatsappDailyTemplate, whatsappTemplateLang, adminChatId }) {
     this.repo = repo;
     this.questionService = questionService;
     this.subscriptionService = subscriptionService;
     this.paymentService = paymentService;
     this.telegram = telegram;
     this.whatsapp = whatsapp;
+    this.adminChatId = adminChatId || null;
     // Phase 2: approved Meta template used for the proactive daily push.
     this.whatsappDailyTemplate = whatsappDailyTemplate || null;
     this.whatsappTemplateLang = whatsappTemplateLang || 'en';
@@ -344,6 +345,25 @@ export class DispatchService {
     }
     console.log(`📊 Affiliate digest: ${sent} sent, ${skipped} skipped (${affiliates.length} affiliates)`);
     return { sent, skipped };
+  }
+
+  // ─── Daily payment reconciliation ──────────────────
+  // Safety net for dropped webhooks: re-checks Flutterwave's successful payments
+  // against the subscriptions table, auto-activates any the webhook missed, and
+  // alerts the admin. Env-gated (RECONCILE_ENABLED).
+  async runPaymentReconciliation() {
+    const r = await this.paymentService.reconcile({ autoFix: true });
+    if (r.missing > 0 && this.adminChatId) {
+      const lines = r.gaps.map(g =>
+        `• ${g.txRef} (₦${g.amount}) — ${g.fixed ? 'auto-activated ✅' : 'NEEDS ATTENTION: ' + g.reason}`);
+      const msg = `⚠️ *Payment reconciliation*\n` +
+        `${r.checked} checked · ${r.missing} not recorded · ${r.fixed} auto-fixed · ${r.failed} failed\n\n` +
+        lines.join('\n');
+      try { await this.telegram.send(this.adminChatId, msg, { parse_mode: 'Markdown' }); }
+      catch (err) { console.error('Reconciliation admin alert failed:', err.message); }
+    }
+    console.log(`💳 Reconciliation: ${r.checked} checked, ${r.missing} missing, ${r.fixed} fixed, ${r.failed} failed`);
+    return r;
   }
 
   async _sendAffiliateDigest(a) {
