@@ -48,6 +48,7 @@ export class TelegramBotAdapter {
     this.tg.onText(/\/cancel/, this._safe(this._handleCancelCmd.bind(this)));
     this.tg.onText(/\/coach/, this._safe(this._handleCoachCmd.bind(this)));
     this.tg.onText(/\/refs/, this._safe(this._handleRefsCmd.bind(this)));
+    this.tg.onText(/\/admin/, this._safe(this._handleAdminCmd.bind(this)));
     this.tg.onText(/\/affiliate/, this._safe(this._handleAffiliateCmd.bind(this)));
     this.tg.onText(/\/bank (.+)/, this._safe(this._handleBankCmd.bind(this)));
     this.tg.onText(/\/payouts(.*)/, this._safe(this._handlePayoutsCmd.bind(this)));
@@ -1079,6 +1080,61 @@ export class TelegramBotAdapter {
     }
     out += `\nTag your ads with \`t.me/A1TutorPrep_bot?start=ref_CHANNEL\` to track them here.`;
     await this.tg.send(chatId, out, { parse_mode: 'Markdown' });
+  }
+
+  // ─── /admin — full owner dashboard (admin only) ─────
+  // The single-screen picture /refs never gave: users by status, revenue,
+  // source breakdown with conversion, exam mix, and affiliate payouts owed.
+  async _handleAdminCmd(msg) {
+    const chatId = msg.chat.id;
+    if (!this.adminChatId || String(chatId) !== this.adminChatId) {
+      return this.tg.send(chatId,
+        `This dashboard is for the bot owner.\n(Your chat id is \`${chatId}\`.)`,
+        { parse_mode: 'Markdown' });
+    }
+
+    const stats = await this.analyticsService.getAdminStats();
+    const repo = this.userService.repo;
+    const refs = typeof repo.getRefStats === 'function' ? await repo.getRefStats() : [];
+    const payouts = typeof repo.getPendingPayouts === 'function' ? await repo.getPendingPayouts() : [];
+
+    const ngn = n => '₦' + Number(n || 0).toLocaleString();
+    const u = stats.users;
+    const lines = [
+      `👑 *A1 Tutor — Admin Dashboard*`,
+      ``,
+      `👥 *Users:* ${u.total} total`,
+      `🟢 Paying: *${u.active}*   🟡 Trial: *${u.trial}*   🔴 Expired: *${u.expired}*`,
+      `💰 *Revenue:* ${ngn(stats.revenue?.total)}`,
+      `📚 Question bank: ${Number(stats.questions?.total || 0).toLocaleString()}`,
+    ];
+
+    if (refs.length) {
+      lines.push(``, `📈 *By source* (signups · 🟢pay 🟡trial 🔴exp)`);
+      for (const r of refs) {
+        lines.push(`\`${r.source}\` — ${r.signups} (🟢${r.paying} 🟡${r.on_trial} 🔴${r.expired})`);
+      }
+    }
+
+    const byExam = Object.entries(stats.byExam || {})
+      .filter(([k]) => k && k !== 'undefined' && k !== 'null')
+      .sort((a, b) => b[1] - a[1]);
+    if (byExam.length) {
+      lines.push(``, `🎯 *By exam:* ` + byExam.map(([k, v]) => `${k} ${v}`).join(' · '));
+    }
+
+    const owed = payouts.reduce((s, p) => s + (p.pending || 0), 0);
+    if (owed > 0) {
+      lines.push(``, `💸 *Payouts owed:* ${ngn(owed)}`);
+      for (const p of payouts.filter(p => (p.pending || 0) > 0)) {
+        lines.push(`\`${p.name || p.tag}\` — ${ngn(p.pending)}${p.bank_name ? '' : ' ⚠️no bank'}`);
+      }
+      lines.push(`Settle with /payouts`);
+    } else {
+      lines.push(``, `💸 *Payouts owed:* none 🎉`);
+    }
+
+    await this.tg.send(chatId, lines.join('\n'), { parse_mode: 'Markdown' });
   }
 
   async _handleCoachCmd(msg) {
