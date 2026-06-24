@@ -172,12 +172,21 @@ export class FlutterwaveGateway {
    * List successful transactions, for the daily payment-reconciliation safety net.
    * Pages defensively and caps pages to avoid a runaway on large accounts.
    */
-  async listSuccessfulTransactions({ maxPages = 5 } = {}) {
+  async listSuccessfulTransactions({ maxPages = 5, sinceDays = 60 } = {}) {
+    // Flutterwave's /transactions endpoint returns only a narrow default window
+    // when no date range is supplied — which made the daily reconciliation see
+    // "0 checked" and silently miss every webhook-dropped payment. Always pass an
+    // explicit from/to so we sweep the last `sinceDays` days. `to` is tomorrow so
+    // payments made later *today* are included regardless of timezone.
+    const DAY = 24 * 60 * 60 * 1000;
+    const fmt = (d) => d.toISOString().split('T')[0];
+    const from = fmt(new Date(Date.now() - sinceDays * DAY));
+    const to = fmt(new Date(Date.now() + DAY));
     const out = [];
     for (let page = 1; page <= maxPages; page++) {
       try {
         const { data } = await this.client.get('/transactions', {
-          params: { status: 'successful', page },
+          params: { status: 'successful', from, to, page },
         });
         const batch = data?.data || [];
         out.push(...batch);
