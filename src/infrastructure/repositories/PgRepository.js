@@ -400,6 +400,14 @@ export class PgRepository {
     return Number(rows[0].total);
   }
 
+  // Questions a user has answered — used to personalise the trial-ending paywall.
+  async getAnswerCount(userId) {
+    const { rows } = await this.pool.query(
+      'SELECT count(*)::int AS n FROM responses WHERE user_id = $1', [userId]
+    );
+    return rows[0].n;
+  }
+
   // ─── Dispatches ────────────────────────────────────
 
   async logDispatch(userId, questionIds) {

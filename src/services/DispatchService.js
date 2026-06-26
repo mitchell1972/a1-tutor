@@ -3,7 +3,7 @@
 // This is the scheduler's entry point into the application layer.
 import { checkAccess } from '../domain/SubscriptionValidator.js';
 import { TRIAL_DAYS, EXAM_TYPES, daysToExam } from '../config/subjects.js';
-import { getPlan, PLANS } from '../config/plans.js';
+import { getPlan, PLANS, DEFAULT_PLAN } from '../config/plans.js';
 
 export class DispatchService {
   constructor({ repo, questionService, subscriptionService, paymentService, telegram, whatsapp, whatsappDailyTemplate, whatsappTemplateLang, adminChatId }) {
@@ -91,16 +91,13 @@ export class DispatchService {
     }
   }
 
-  // Trial countdown line for the morning message. Card savers are reassured;
-  // everyone else is nudged toward saving a card or subscribing before the lock.
+  // Trial countdown line for the morning message — nudges toward one-tap hosted
+  // checkout (transfer/USSD/card, no card-on-file).
   _trialCountdownLine(user, access) {
     if (access?.status !== 'trial') return '';
     const d = access.daysLeft;
     const left = d <= 1 ? '⏳ *Trial ends today!*' : `⏳ Free trial: *${d} days left*.`;
-    const tail = (user.card_token && user.autobill_status === 'on')
-      ? ` Your ${getPlan(user.autobill_plan)?.label || ''} plan starts automatically after — /cancel anytime.`
-      : ' Save a card (/start → 💳) or /subscribe to continue after.';
-    return `\n${left}${tail}\n`;
+    return `\n${left} Tap /subscribe to keep going after — pay by transfer, USSD or card.\n`;
   }
 
   // "📅 218 days to JAMB 2027" — daily urgency, sharper as the exam nears.
@@ -141,22 +138,36 @@ export class DispatchService {
     );
   }
 
-  async _notifyTrialExpired(user, failReason = null) {
-    const chargeFailed = user.card_token && user.autobill_status === 'on' && failReason;
-    const msg = (chargeFailed
-      ? `⚠️ *Your trial ended and we couldn't charge your saved card.*\n\n`
-      : `⏰ *Your ${TRIAL_DAYS}-day free trial has ended!*\n\n`) +
-      `Subscribe to continue receiving daily JAMB/SSCE questions:\n` +
-      `• ₦${PLANS.weekly.amount}/week\n• ₦${PLANS.monthly.amount.toLocaleString()}/month\n• ₦${PLANS.termly.amount.toLocaleString()} Exam Season Pass (3 months)\n\n` +
-      `Pay by card, bank transfer or USSD — type /subscribe to keep learning! 📚`;
+  async _notifyTrialExpired(user, _failReason = null) {
+    const plan = getPlan(DEFAULT_PLAN);
+    const msg = `⏰ *Your ${TRIAL_DAYS}-day free trial has ended!*\n\n` +
+      `Keep your daily JAMB/WAEC/NECO questions, mock exams & AI coach going all the way ` +
+      `to your exam with the *${plan.label}* — *₦${plan.amount.toLocaleString()}*, one payment, no renewals.\n\n` +
+      `Pay by *bank transfer, USSD or card* — no card details saved. 📚`;
 
     if (user.telegram_id) {
-      await this.telegram.sendWithKeyboard(user.telegram_id, msg, [
-        [{ text: '💳 Subscribe Now', callback_data: 'menu:subscribe' }],
-      ]);
+      const kb = await this._seasonPassKeyboard(user);
+      await this.telegram.sendWithKeyboard(user.telegram_id, msg, kb);
     } else if (user.phone) {
       await this.whatsapp.sendText(user.phone, msg.replace(/\*/g, ''));
     }
+  }
+
+  // One-tap hosted-checkout keyboard for the season pass: a single url button →
+  // Flutterwave page (transfer/USSD/card, no stored card). Falls back to the in-bot
+  // plans menu if the link can't be created.
+  async _seasonPassKeyboard(user) {
+    const plan = getPlan(DEFAULT_PLAN);
+    try {
+      const { link } = await this.paymentService.createPaymentLink(user.id, DEFAULT_PLAN);
+      if (link) return [
+        [{ text: `💳 Get the ${plan.label} — ₦${plan.amount.toLocaleString()}`, url: link }],
+        [{ text: 'See other plans', callback_data: 'menu:subscribe' }],
+      ];
+    } catch (err) {
+      console.error(`Season-pass link failed for ${user.id}:`, err.message);
+    }
+    return [[{ text: '💳 Subscribe Now', callback_data: 'menu:subscribe' }]];
   }
 
   // Card saver's trial just ended and the auto-charge went through.
@@ -320,6 +331,48 @@ export class DispatchService {
     return this.telegram.sendWithKeyboard(user.telegram_id, text, [
       [{ text: '💳 See plans & sign up', callback_data: 'menu:subscribe' }],
     ]);
+  }
+
+  // ─── Trial-ending paywall ──────────────────────────
+  // The day BEFORE a trial ends, send ONE engagement-aware message with a single
+  // one-tap hosted-checkout button (no card-on-file). Env-gated (TRIAL_PAYWALL_ENABLED),
+  // idempotent per trial via a sessions marker, rate-limited. Telegram only.
+  async runTrialEndingPaywall() {
+    const users = await this.subscriptionService.getExpiringTrials(24);
+    if (!users.length) return { sent: 0, skipped: 0 };
+
+    let sent = 0;
+    let skipped = 0;
+    for (const user of users) {
+      try {
+        if (!user.telegram_id) { skipped++; continue; }
+        const marker = await this.repo.getSession(`trial_paywall:${user.id}`);
+        if (marker?.sent) { skipped++; continue; }   // already nudged this trial
+        await this._sendTrialEndingPaywall(user);
+        await this.repo.setSession(`trial_paywall:${user.id}`, { sent: true });
+        sent++;
+        await this._sleep(1500);
+      } catch (err) {
+        console.error(`Trial paywall failed for ${user.id}:`, err.message);
+      }
+    }
+    console.log(`🔔 Trial-ending paywall: ${sent} sent, ${skipped} skipped (${users.length} candidates)`);
+    return { sent, skipped };
+  }
+
+  async _sendTrialEndingPaywall(user) {
+    const plan = getPlan(DEFAULT_PLAN);
+    const answered = (await this.repo.getAnswerCount?.(user.id)) ?? 0;
+    const proof = answered > 0
+      ? `You've answered *${answered} question${answered !== 1 ? 's' : ''}* so far — don't lose your momentum. `
+      : '';
+    const msg =
+      `⏳ *Your free trial ends tomorrow.*\n\n` +
+      `${proof}Keep your daily questions, mock exams & AI coach going all the way to your exam ` +
+      `with the *${plan.label}* — *₦${plan.amount.toLocaleString()}*, one payment, no renewals.\n\n` +
+      `Tap below — pay by *bank transfer, USSD or card*. No card details saved.`;
+    const kb = await this._seasonPassKeyboard(user);
+    await this.telegram.sendWithKeyboard(user.telegram_id, msg, kb);
   }
 
   // ─── Affiliate daily digest ────────────────────────

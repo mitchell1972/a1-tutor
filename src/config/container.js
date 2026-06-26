@@ -177,6 +177,18 @@ export async function buildContainer(env) {
     console.log('💳 Daily payment reconciliation: ENABLED');
   }
 
+  // Trial-ending paywall: the day before a trial ends, one engagement-aware one-tap
+  // pay message. OFF unless TRIAL_PAYWALL_ENABLED=true. TRIAL_PAYWALL_CRON is server TZ
+  // (UTC); default 17:00 UTC = 18:00 WAT (evening, after the school day).
+  if (env.TRIAL_PAYWALL_ENABLED === 'true' || env.TRIAL_PAYWALL_ENABLED === '1') {
+    dailyJobs.push({
+      name: 'trial-ending-paywall',
+      cron: env.TRIAL_PAYWALL_CRON || '0 17 * * *',
+      fn: () => dispatchService.runTrialEndingPaywall(),
+    });
+    console.log('🔔 Trial-ending paywall: ENABLED');
+  }
+
   const scheduler = new CronScheduler(
     (hour, minute) => dispatchService.dispatchAt(hour, minute),
     dailyJobs

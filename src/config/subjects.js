@@ -251,12 +251,19 @@ export const EXAM_TARGET_DATES = {
   post_utme: '08-01',
 };
 
-export function daysToExam(examId, now = new Date()) {
+// Absolute date of the next occurrence of an exam (rolls to next year once passed).
+export function examTargetDate(examId, now = new Date()) {
   const md = EXAM_TARGET_DATES[examId];
   if (!md) return null;
   const [m, d] = md.split('-').map(Number);
   let target = new Date(Date.UTC(now.getUTCFullYear(), m - 1, d));
   if (target < now) target = new Date(Date.UTC(now.getUTCFullYear() + 1, m - 1, d));
+  return target;
+}
+
+export function daysToExam(examId, now = new Date()) {
+  const target = examTargetDate(examId, now);
+  if (!target) return null;
   const days = Math.ceil((target - now) / (1000 * 60 * 60 * 24));
   return { days, year: target.getUTCFullYear() };
 }

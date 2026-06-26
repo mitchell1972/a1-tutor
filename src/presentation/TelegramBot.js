@@ -46,6 +46,7 @@ export class TelegramBotAdapter {
     this.tg.onText(/\/stats/, this._safe(this._handleStatsCmd.bind(this)));
     this.tg.onText(/\/subscribe/, this._safe(this._handleSubscribeCmd.bind(this)));
     this.tg.onText(/\/cancel/, this._safe(this._handleCancelCmd.bind(this)));
+    this.tg.onText(/\/stop/, this._safe(this._handleStopCmd.bind(this)));
     this.tg.onText(/\/coach/, this._safe(this._handleCoachCmd.bind(this)));
     this.tg.onText(/\/refs/, this._safe(this._handleRefsCmd.bind(this)));
     this.tg.onText(/\/admin/, this._safe(this._handleAdminCmd.bind(this)));
@@ -283,11 +284,10 @@ export class TelegramBotAdapter {
       `📖 Subjects: ${subjectNames}\n` +
       `⏰ Delivery: Daily at ${timeStr}\n\n` +
       `🎁 *${TRIAL_DAYS}-Day Free Trial* — ends ${trialEnd.toLocaleDateString('en-GB', { day: 'numeric', month: 'long' })}\n` +
-      `I'll count down your trial each day. Save a card now and your plan starts automatically when the trial ends (cancel anytime with /cancel) — or just pay later by card, transfer or USSD.\n\n` +
+      `I'll count down your trial each day. When it ends, one tap subscribes you — pay by bank transfer, USSD or card. No card details saved.\n\n` +
       `Start now with a practice round?`,
       [
         [{ text: '🎯 Start Practice Drill Now', callback_data: 'menu:drill' }],
-        [{ text: '💳 Save card — auto-start after trial', callback_data: 'menu:savecard' }],
         [{ text: '💰 See plans', callback_data: 'menu:subscribe' }],
       ]
     );
@@ -1162,6 +1162,15 @@ export class TelegramBotAdapter {
     return this._showSubscription(msg.chat.id, user);
   }
 
+  // /stop — opt out of re-engagement reminders (respected by scripts/reengage-expired.mjs).
+  async _handleStopCmd(msg) {
+    const user = await this.userService.repo.getUserByTelegram(msg.chat.id);
+    if (!user) return this.tg.send(msg.chat.id, 'Please /start first!');
+    await this.userService.repo.setSession(`reengage_optout:${user.id}`, { optout: true });
+    return this.tg.send(msg.chat.id,
+      `✅ Done — you won't receive re-engagement reminders. You can still /subscribe or /drill anytime.`);
+  }
+
   async _onPlan(chatId, planId) {
     const user = await this.userService.repo.getUserByTelegram(chatId);
     if (!user) return;
@@ -1213,8 +1222,8 @@ export class TelegramBotAdapter {
       `/report — Progress card to share with your parent\n` +
       `/leaders — This week's top scholars\n` +
       `/support <message> — Talk to a real human\n\n` +
-      `*Free Trial:* ${TRIAL_DAYS} days. Save a card to continue automatically after — or pay by card/transfer/USSD when it ends.\n` +
-      `*Plans:* ₦${PLANS.weekly.amount}/week, ₦${PLANS.monthly.amount.toLocaleString()}/month, or ₦${PLANS.termly.amount.toLocaleString()} for the Exam Season Pass.`,
+      `*Free Trial:* ${TRIAL_DAYS} days. When it ends, /subscribe — one tap, pay by bank transfer, USSD or card (no card saved).\n` +
+      `*Plans:* ₦${PLANS.season.amount.toLocaleString()} Exam Season Pass (one-off), ₦${PLANS.weekly.amount}/week, ₦${PLANS.monthly.amount.toLocaleString()}/month.`,
       { parse_mode: 'Markdown', ...(kb ? { reply_markup: { inline_keyboard: kb } } : {}) }
     );
   }
@@ -1232,10 +1241,6 @@ export class TelegramBotAdapter {
       [{ text: '📊 My Stats', callback_data: 'menu:stats' }, { text: '🧑‍🏫 AI Coach', callback_data: 'menu:coach' }],
       [{ text: '💳 Subscribe', callback_data: 'menu:subscribe' }],
     ];
-    // Trial users without a saved card get the auto-continue shortcut.
-    if (user.subscription_status === 'trial' && !(user.card_token && user.autobill_status === 'on')) {
-      rows.push([{ text: '💳 Save card — auto-continue after trial', callback_data: 'menu:savecard' }]);
-    }
     rows.push([{ text: '🤝 Earn with us', callback_data: 'aff:menu' }]);
     rows.push([{ text: '❓ Help', callback_data: 'menu:help' }]);
     rows.push([{ text: `${status} | ${user.subjects?.length || 0} subjects`, callback_data: 'menu:subscribe' }]);

@@ -56,6 +56,25 @@ export class SubscriptionService {
   }
 
   /**
+   * Users whose trial ENDS within the next `withinHours` (default 24h = the day
+   * before). Powers the proactive one-tap trial-ending paywall. Only trial users —
+   * anyone already paid / expired / partner is excluded.
+   */
+  async getExpiringTrials(withinHours = 24) {
+    const users = await this.repo.all('users');
+    const now = new Date();
+    const windowMs = withinHours * 60 * 60 * 1000;
+    return users.filter(u => {
+      if (u.subscription_status !== 'trial') return false;
+      const trialStart = u.trial_start ? new Date(u.trial_start) : new Date(u.created_at);
+      const trialEnd = new Date(trialStart);
+      trialEnd.setDate(trialEnd.getDate() + TRIAL_DAYS);
+      const msLeft = trialEnd - now;
+      return msLeft > 0 && msLeft <= windowMs;
+    });
+  }
+
+  /**
    * Activate a subscription after confirmed payment.
    */
   async activate(userId, plan, endDate) {

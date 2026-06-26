@@ -1,7 +1,7 @@
 // src/services/PaymentService.js
 // Orchestrates payment link creation, webhook processing, and trial-end auto-billing.
-import { getPlan, PLANS, CARD_SETUP_FEE } from '../config/plans.js';
-import { calculateEndDate } from '../domain/SubscriptionValidator.js';
+import { getPlan, PLANS, CARD_SETUP_FEE, CARD_ONFILE_ENABLED } from '../config/plans.js';
+import { computeEndDate } from '../domain/SubscriptionValidator.js';
 
 export class PaymentService {
   constructor({ repo, flutterwave }) {
@@ -96,6 +96,7 @@ export class PaymentService {
    * chosen plan on the stored token and activate. Returns { charged, plan, endDate }.
    */
   async autoChargeTrialEnd(user) {
+    if (!CARD_ONFILE_ENABLED) return { charged: false, reason: 'card_onfile_disabled' };
     if (!user?.card_token || user.autobill_status !== 'on') return { charged: false, reason: 'not_enrolled' };
 
     const planId = user.autobill_plan || 'weekly';
@@ -131,7 +132,10 @@ export class PaymentService {
 
   // Shared activation: record the subscription and flip the user to active.
   async _activate(userId, plan, txRef, amount, flwId) {
-    const endDate = calculateEndDate(plan);
+    // Fetch the user so "until exam" plans (the season pass) end on their exam date.
+    // Defensive: reconcile / minimal-repo tests may not implement getUser.
+    const user = await this.repo.getUser?.(userId);
+    const endDate = computeEndDate(plan, user || {});
 
     await this.repo.createSubscription({
       user_id: userId,
