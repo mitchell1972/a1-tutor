@@ -25,10 +25,13 @@ function mkDispatch({ expiring, preMarked = false }) {
   const sent = [];
   const sessions = {};
   if (preMarked) sessions['trial_paywall:u1'] = { sent: true };
+  const now = Date.now();
+  const fiveDayStreak = [0, 1, 2, 3, 4].map(d => new Date(now - d * 86400000).toISOString());
   const repo = {
     getSession: async (k) => sessions[k] || null,
     setSession: async (k, v) => { sessions[k] = v; },
-    getAnswerCount: async () => 12,
+    getAnswerCount: async () => 40,
+    getAllUserResponseDates: async () => fiveDayStreak, // today + 4 prior days → 5-day streak
   };
   const subscriptionService = { getExpiringTrials: async () => expiring };
   const paymentService = { createPaymentLink: async () => ({ link: 'https://pay.example/x' }) };
@@ -37,8 +40,8 @@ function mkDispatch({ expiring, preMarked = false }) {
   return { svc, sent, sessions };
 }
 
-test('runTrialEndingPaywall sends a one-tap hosted-checkout button and marks idempotent', async () => {
-  const { svc, sent, sessions } = mkDispatch({ expiring: [{ id: 'u1', telegram_id: 111 }] });
+test('runTrialEndingPaywall: one-tap button + real answered-count AND streak, marks idempotent (last-day → fires once)', async () => {
+  const { svc, sent, sessions } = mkDispatch({ expiring: [{ id: 'u1', telegram_id: 111, exam_type: 'jamb' }] });
   const r = await svc.runTrialEndingPaywall();
 
   assert.equal(r.sent, 1);
@@ -46,7 +49,8 @@ test('runTrialEndingPaywall sends a one-tap hosted-checkout button and marks ide
   // Primary button is a DIRECT url to the hosted page — one tap, no card-on-file step.
   assert.equal(sent[0].kb[0][0].url, 'https://pay.example/x');
   assert.match(sent[0].text, /trial ends tomorrow/i);
-  assert.match(sent[0].text, /12 questions/); // uses the student's own engagement
+  assert.match(sent[0].text, /40 questions/);   // real answered-count
+  assert.match(sent[0].text, /5-day streak/);    // real streak from StreakTracker
   assert.equal(sessions['trial_paywall:u1'].sent, true);
 });
 

@@ -51,56 +51,6 @@ export class FlutterwaveGateway {
   }
 
   /**
-   * Create a CARD-ONLY payment link that verifies + tokenizes the student's card
-   * (the "save card" flow). The small charge is real; the reusable token arrives
-   * with the charge.completed webhook and is read via verifyTransaction().
-   */
-  async createCardSetupLink({ userId, email, phone, name, plan, amount }) {
-    const payload = {
-      tx_ref: `a1-cardsetup-${userId}-${plan}-${Date.now()}`,
-      amount,
-      currency: 'NGN',
-      payment_options: 'card', // tokenization needs a card — no transfer/USSD here
-      redirect_url: this.redirectUrl,
-      customer: {
-        email: email || `${(phone || userId || 'student').toString().replace(/[^a-zA-Z0-9]/g, '')}@students.a1tutor.ng`,
-        phonenumber: phone,
-        name: name || 'Student',
-      },
-      customizations: {
-        title: 'A1 Tutor — Save Card',
-        description: 'One-time card check. Your plan starts automatically when your free trial ends.',
-      },
-      meta: { user_id: userId, plan, purpose: 'card_setup' },
-    };
-
-    const { data } = await this.client.post('/payments', payload);
-    if (data.status !== 'success') throw new Error(data.message || 'Card setup link failed');
-    return { link: data.data.link, txRef: payload.tx_ref };
-  }
-
-  /**
-   * Charge a previously saved card token (auto-billing at trial end / renewals).
-   */
-  async chargeToken({ token, email, amount, txRef, narration }) {
-    try {
-      const { data } = await this.client.post('/tokenized-charges', {
-        token,
-        currency: 'NGN',
-        country: 'NG',
-        amount,
-        email,
-        tx_ref: txRef,
-        narration: narration || 'A1 Tutor subscription',
-      });
-      const ok = data.status === 'success' && data.data?.status === 'successful';
-      return { success: ok, flwId: data.data?.id || null, status: data.data?.status || data.status };
-    } catch (err) {
-      return { success: false, flwId: null, status: err.response?.data?.message || err.message };
-    }
-  }
-
-  /**
    * Verify webhook signature from Flutterwave.
    */
   verifyWebhook(signature, payload) {
@@ -125,10 +75,6 @@ export class FlutterwaveGateway {
         amount: event.data.amount,
         flwId: event.data.id,
       };
-      // "Save card" flow: small card-only charge whose job is to mint a reusable token.
-      if (event.data.meta?.purpose === 'card_setup') {
-        return { type: 'card_setup_successful', ...base };
-      }
       return { type: 'payment_successful', ...base };
     }
 

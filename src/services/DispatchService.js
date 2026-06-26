@@ -4,6 +4,7 @@
 import { checkAccess } from '../domain/SubscriptionValidator.js';
 import { TRIAL_DAYS, EXAM_TYPES, daysToExam } from '../config/subjects.js';
 import { getPlan, PLANS, DEFAULT_PLAN } from '../config/plans.js';
+import { calculateStreak } from '../domain/StreakTracker.js';
 
 export class DispatchService {
   constructor({ repo, questionService, subscriptionService, paymentService, telegram, whatsapp, whatsappDailyTemplate, whatsappTemplateLang, adminChatId }) {
@@ -46,19 +47,11 @@ export class DispatchService {
     let access = await this.subscriptionService.getStatus(user.id);
     if (!access.valid) {
       if (access.reason === 'trial_expired') {
-        // Saved a card and didn't cancel? Charge their plan now and carry on seamlessly.
-        const result = await this.paymentService.autoChargeTrialEnd(user);
-        if (result.charged) {
-          await this._notifyAutoCharged(user, result.plan, result.endDate);
-          access = await this.subscriptionService.getStatus(user.id); // now active
-        } else {
-          await this.subscriptionService.expireTrial(user.id);
-          await this._notifyTrialExpired(user, result.reason);
-          return;
-        }
-      } else {
-        return;
+        // Trial's over — lock access and send the one-tap pay paywall (no auto-charge).
+        await this.subscriptionService.expireTrial(user.id);
+        await this._notifyTrialExpired(user);
       }
+      return;
     }
 
     // WhatsApp: proactive sends outside Meta's 24-hour window need an approved
@@ -168,39 +161,6 @@ export class DispatchService {
       console.error(`Season-pass link failed for ${user.id}:`, err.message);
     }
     return [[{ text: '💳 Subscribe Now', callback_data: 'menu:subscribe' }]];
-  }
-
-  // Card saver's trial just ended and the auto-charge went through.
-  async _notifyAutoCharged(user, planId, endDate) {
-    const plan = getPlan(planId);
-    const msg = `✅ *Welcome aboard!*\n\n` +
-      `Your free trial ended, so your saved card was charged ₦${plan ? plan.amount.toLocaleString() : ''} ` +
-      `for the ${plan?.label || planId} plan — active until ${new Date(endDate).toLocaleDateString('en-GB')}.\n\n` +
-      `Your daily questions continue uninterrupted. 📚 (Manage with /subscribe · /cancel)`;
-
-    if (user.telegram_id) {
-      await this.telegram.send(user.telegram_id, msg, { parse_mode: 'Markdown' });
-    } else if (user.phone) {
-      await this.whatsapp.sendText(user.phone, msg.replace(/\*/g, ''));
-    }
-  }
-
-  // Card-setup payment landed: confirm enrolment in trial-end auto-billing.
-  async notifyCardSaved(userId, planId, last4) {
-    const user = await this.repo.getUser(userId);
-    if (!user) return;
-    const plan = getPlan(planId);
-
-    const msg = `💳 *Card saved${last4 ? ` (•••• ${last4})` : ''}!*\n\n` +
-      `When your free trial ends, your ${plan?.label || planId} plan (₦${plan ? plan.amount.toLocaleString() : ''}) ` +
-      `starts automatically — no interruption to your daily questions.\n\n` +
-      `Changed your mind? Type /cancel any time before the trial ends.`;
-
-    if (user.telegram_id) {
-      await this.telegram.send(user.telegram_id, msg, { parse_mode: 'Markdown' });
-    } else if (user.phone) {
-      await this.whatsapp.sendText(user.phone, msg.replace(/\*/g, ''));
-    }
   }
 
   async notifyPaymentConfirmed(userId, plan, endDate) {
@@ -363,13 +323,19 @@ export class DispatchService {
   async _sendTrialEndingPaywall(user) {
     const plan = getPlan(DEFAULT_PLAN);
     const answered = (await this.repo.getAnswerCount?.(user.id)) ?? 0;
-    const proof = answered > 0
-      ? `You've answered *${answered} question${answered !== 1 ? 's' : ''}* so far — don't lose your momentum. `
-      : '';
+    const streak = calculateStreak((await this.repo.getAllUserResponseDates?.(user.id)) ?? []);
+    const examLabel = EXAM_TYPES[user.exam_type?.toUpperCase()]?.label || 'your exam';
+
+    // Lead with the student's own real progress so the pass feels worth keeping.
+    let proof = '';
+    if (answered > 0 && streak > 0) proof = `You've answered *${answered} question${answered !== 1 ? 's' : ''}* and you're on a *${streak}-day streak* 🔥 — don't lose your momentum. `;
+    else if (answered > 0) proof = `You've answered *${answered} question${answered !== 1 ? 's' : ''}* so far — don't lose your momentum. `;
+    else if (streak > 0) proof = `You're on a *${streak}-day streak* 🔥 — don't lose your momentum. `;
+
     const msg =
       `⏳ *Your free trial ends tomorrow.*\n\n` +
-      `${proof}Keep your daily questions, mock exams & AI coach going all the way to your exam ` +
-      `with the *${plan.label}* — *₦${plan.amount.toLocaleString()}*, one payment, no renewals.\n\n` +
+      `${proof}Pay *₦${plan.amount.toLocaleString()}* once to keep your daily questions, mock exams & AI coach ` +
+      `going all the way to ${examLabel} — the *${plan.label}*, no renewals.\n\n` +
       `Tap below — pay by *bank transfer, USSD or card*. No card details saved.`;
     const kb = await this._seasonPassKeyboard(user);
     await this.telegram.sendWithKeyboard(user.telegram_id, msg, kb);

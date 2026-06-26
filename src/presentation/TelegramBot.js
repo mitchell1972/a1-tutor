@@ -45,7 +45,6 @@ export class TelegramBotAdapter {
     this.tg.onText(/\/drill/, this._safe(this._handleDrillCmd.bind(this)));
     this.tg.onText(/\/stats/, this._safe(this._handleStatsCmd.bind(this)));
     this.tg.onText(/\/subscribe/, this._safe(this._handleSubscribeCmd.bind(this)));
-    this.tg.onText(/\/cancel/, this._safe(this._handleCancelCmd.bind(this)));
     this.tg.onText(/\/stop/, this._safe(this._handleStopCmd.bind(this)));
     this.tg.onText(/\/coach/, this._safe(this._handleCoachCmd.bind(this)));
     this.tg.onText(/\/refs/, this._safe(this._handleRefsCmd.bind(this)));
@@ -133,7 +132,6 @@ export class TelegramBotAdapter {
       else if (data.startsWith('time:'))  await this._onTime(chatId, data.split(':').slice(1), query.message.message_id);
       else if (data.startsWith('menu:'))  await this._onMenu(chatId, data.split(':')[1]);
       else if (data.startsWith('plan:'))  await this._onPlan(chatId, data.split(':')[1]);
-      else if (data.startsWith('autobill:')) await this._onAutobillPlan(chatId, data.split(':')[1]);
       else if (data === 'aff:join') await this._onAffiliateJoin(chatId);
       else if (data === 'aff:menu') await this._handleAffiliateCmd({ chat: { id: chatId } });
       else if (data.startsWith('mockans:')) await this._onMockAnswer(chatId, data, query.message.message_id);
@@ -303,77 +301,11 @@ export class TelegramBotAdapter {
       case 'drill':     return this._startDrill(chatId, user);
       case 'stats':     return this._showStats(chatId, user);
       case 'subscribe': return this._showSubscription(chatId, user);
-      case 'savecard':  return this._showSaveCard(chatId, user);
       case 'coach':     return this._sendCoachNote(chatId, user);
       case 'help':      return this._showHelp(chatId, user);
       case 'main':
       default:          return this.tg.sendWithKeyboard(chatId, '📋 Main Menu', this._mainMenuKeyboard(user));
     }
-  }
-
-  // ─── Save card (trial-end auto-billing) ─────────────
-
-  async _showSaveCard(chatId, user) {
-    if (user.card_token && user.autobill_status === 'on') {
-      return this.tg.send(chatId,
-        `💳 Card already saved${user.card_last4 ? ` (•••• ${user.card_last4})` : ''} — your ` +
-        `*${user.autobill_plan}* plan starts automatically when your trial ends.\n/cancel to stop it.`,
-        { parse_mode: 'Markdown' });
-    }
-    await this.tg.sendWithKeyboard(chatId,
-      `💳 *Save a card for after your trial*\n\n` +
-      `Pick the plan to start automatically when your free trial ends. ` +
-      `A one-time ₦100 card check applies now; you can /cancel before the trial ends and you won't be charged again.`,
-      [
-        ...['weekly', 'monthly', 'termly'].map(id =>
-          [{ text: `₦${PLANS[id].amount.toLocaleString()} — ${PLANS[id].label}`, callback_data: `autobill:${id}` }]),
-        [{ text: '« Back', callback_data: 'menu:main' }],
-      ]
-    );
-  }
-
-  async _onAutobillPlan(chatId, planId) {
-    const user = await this.userService.repo.getUserByTelegram(chatId);
-    if (!user) return;
-
-    try {
-      const { link } = await this.paymentService.createCardSetupLink(user.id, planId);
-      await this.tg.send(chatId,
-        `💳 *Save your card*\n\n` +
-        `Tap below to complete the one-time ₦100 card check. ` +
-        `Your plan then starts automatically when your free trial ends — /cancel anytime before that.`,
-        {
-          parse_mode: 'Markdown',
-          reply_markup: {
-            inline_keyboard: [
-              [{ text: '💳 Save card (₦100 one-time)', url: link }],
-              [{ text: '« Back to plans', callback_data: 'menu:savecard' }],
-            ],
-          },
-        }
-      );
-    } catch (err) {
-      console.error('Card setup link failed:', err);
-      await this.tg.send(chatId, '⚠️ Card service temporarily unavailable. Try again later.');
-    }
-  }
-
-  async _handleCancelCmd(msg) {
-    const user = await this.userService.repo.getUserByTelegram(msg.chat.id);
-    if (!user) return this.tg.send(msg.chat.id, 'Please /start first!');
-
-    if (user.card_token && user.autobill_status === 'on') {
-      await this.paymentService.cancelAutobill(user.id);
-      return this.tg.send(msg.chat.id,
-        `✅ *Auto-billing cancelled.*\n\nYour card will NOT be charged when the trial ends. ` +
-        `Your trial (and any active plan) runs to its end date — after that, /subscribe to continue. ` +
-        `You can re-enable anytime from /start → 💳.`,
-        { parse_mode: 'Markdown' });
-    }
-    return this.tg.send(msg.chat.id,
-      `Nothing to cancel — no auto-billing is set up. ` +
-      `Subscriptions here are pay-as-you-go: when your current access ends, you simply choose whether to pay again. ` +
-      `Check /subscribe for your status.`);
   }
 
   // ─── Drill ─────────────────────────────────────────
@@ -1214,7 +1146,6 @@ export class TelegramBotAdapter {
       `/drill — Start today's practice\n` +
       `/stats — View your performance\n` +
       `/subscribe — Manage subscription\n` +
-      `/cancel — Stop trial-end auto-billing\n` +
       `/coach — Personal AI coach note on your progress\n` +
       `/affiliate — Earn ${AFFILIATE_PERCENT}% sharing A1 Tutor\n` +
       `/mock — Timed mock exam, real CBT conditions\n` +
