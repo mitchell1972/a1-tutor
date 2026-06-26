@@ -24,16 +24,6 @@ async function main() {
     let questionCount = await container.repo.getTotalQuestions();
     console.log(`📦 Questions in bank: ${questionCount}`);
 
-    // 3a. Check for pending ingest (new scraped questions to validate and add)
-    try {
-      const { default: ingestPending } = await import('../scripts/ingest-pending.js');
-      await ingestPending;
-      questionCount = await container.repo.getTotalQuestions();
-      console.log(`📦 Questions after ingest: ${questionCount}`);
-    } catch (e) {
-      console.warn('⚠️  Pending ingest skipped:', e.message);
-    }
-
     if (questionCount === 0) {
       console.log('🫙 Empty bank — seeding questions...');
       const { seed } = await import('../scripts/seed-questions.js');
